@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { concat, fromHex, toHex } from '../../src/crypto/bytes.ts';
-import { importPublicKey } from '../../src/crypto/public-key.ts';
-import { sealGrant } from '../../src/crypto/grant.ts';
+import { MemoryPinStore, importPublicKey, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { createGrant } from '../../src/crypto/grant.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 
@@ -52,10 +52,15 @@ test('C-12 圧縮形式の公開鍵（Wycheproof の acceptable）は、非圧�
   }
 });
 
-test('C-12 不正な公開鍵を宛先にしたグラントは作らない', async () => {
-  const notOnCurve = cases.find((t) => t.result === 'invalid' && t.public.length === 130)!;
+test('C-12 不正な公開鍵は固定できず、宛先にしたグラントも作らない', async () => {
+  const notOnCurve = fromHex(cases.find((t) => t.result === 'invalid' && t.public.length === 130)!.public);
+  const pins = new MemoryPinStore();
+  const isInvalid = (e: unknown) => e instanceof CryptoError && e.code === 'INVALID_PUBLIC_KEY';
+  await assert.rejects(pinPublicKey(pins, 'member_bad', notOnCurve), isInvalid);
+  // 固定の保存先が壊れて不正な値が入っていても、包む前の読み込みで拒否する
+  await pins.set('member_bad', notOnCurve);
   await assert.rejects(
-    sealGrant({ keyId: 'key_bad', publicKey: fromHex(notOnCurve.public) }, 1, generateVaultKeyRaw()),
-    (e: unknown) => e instanceof CryptoError && e.code === 'INVALID_PUBLIC_KEY',
+    createGrant({ pins, memberId: 'member_bad', recipient: { keyId: 'key_bad', publicKey: notOnCurve }, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() }),
+    isInvalid,
   );
 });

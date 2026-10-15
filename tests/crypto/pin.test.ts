@@ -1,0 +1,124 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { concat, fromHex, toHex } from '../../src/crypto/bytes.ts';
+import { MemoryPinStore, assertPinned, fingerprint, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { createGrant, openGrant } from '../../src/crypto/grant.ts';
+import { createMemberKey } from '../../src/crypto/member-key.ts';
+import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
+import { CryptoError } from '../../src/crypto/errors.ts';
+
+function isCode(code: string) {
+  return (e: unknown) => e instanceof CryptoError && e.code === code;
+}
+
+async function newPublicKey() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+}
+
+// 学習メモの公開鍵
+const memoPublicKey = concat(
+  new Uint8Array([0x04]),
+  fromHex(46749387051993978084910577706322439418722029122079100901817284889689444358162n.toString(16).padStart(64, '0')),
+  fromHex(15385064884553841494372430373701728411482615718101619707862451283578032743044n.toString(16).padStart(64, '0')),
+);
+
+test('フィンガープリントは SHA-256 の先頭30バイトを5バイトずつ6組にし、10万で割った余りを5桁で表す', async () => {
+  const fp = await fingerprint(memoPublicKey);
+  assert.match(fp, /^\d{5}( \d{5}){5}$/);
+  // 仕様どおりに、テストの中で別に計算して比べる
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', memoPublicKey));
+  assert.equal(toHex(digest).slice(0, 20), '70dd2685e8369120b12d'); // 学習メモの値
+  const groups: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    let n = 0n;
+    for (const b of digest.slice(i * 5, i * 5 + 5)) n = n * 256n + BigInt(b);
+    groups.push((n % 100000n).toString().padStart(5, '0'));
+  }
+  assert.equal(fp, groups.join(' '));
+});
+
+test('フィンガープリントは公開鍵が1ビット違えば変わる', async () => {
+  const a = await newPublicKey();
+  const fa = await fingerprint(a);
+  assert.equal(fa, await fingerprint(a.slice()));
+  assert.notEqual(fa, await fingerprint(await newPublicKey()));
+});
+
+test('固定できるのは正しい公開鍵だけ', async () => {
+  const store = new MemoryPinStore();
+  const bad = memoPublicKey.slice();
+  bad[64]! ^= 1; // 曲線上にない点になる
+  await assert.rejects(pinPublicKey(store, 'member_c', bad), isCode('INVALID_PUBLIC_KEY'));
+});
+
+test('固定値との比較は、表示用の文字列ではなく公開鍵のバイト列で行う', async () => {
+  const store = new MemoryPinStore();
+  const a = await newPublicKey();
+  await pinPublicKey(store, 'member_c', a);
+  await assertPinned(store, 'member_c', a.slice());
+  await assert.rejects(assertPinned(store, 'member_c', await newPublicKey()), isCode('PUBLIC_KEY_MISMATCH'));
+  // 固定した後で呼び出し側の配列を書き換えても、固定値は変わらない
+  a[10]! ^= 1;
+  await assert.rejects(assertPinned(store, 'member_c', a), isCode('PUBLIC_KEY_MISMATCH'));
+});
+
+// P-01 の場面：
+//   1. 管理者は承認のとき、C さんのフィンガープリントを Discord 以外の経路で照合し、公開鍵を端末に固定した
+//   2. その後、乗っ取られたサーバーが D1 の C さんの公開鍵を、攻撃者の公開鍵に差し替えた
+//   3. 管理者がグラントを作ろうとする（ローテーションなど）
+test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替えてから、管理者がグラントを作ると、検知してグラントを作らない', async () => {
+  const memberC = await createMemberKey('c-san-kawa-mori-yama-18');
+  const attacker = await createMemberKey('attacker-kuro-yami-99x');
+  const pins = new MemoryPinStore();
+  await pinPublicKey(pins, 'member_c', memberC.record.publicKey);
+
+  // サーバーが返す C さんの鍵情報（公開鍵だけ攻撃者のものに差し替えられている）
+  const fromServer = { keyId: memberC.record.keyId, publicKey: attacker.record.publicKey };
+
+  let grant: unknown;
+  await assert.rejects(
+    (async () => {
+      grant = await createGrant({ pins, memberId: 'member_c', recipient: fromServer, vaultKeyVersion: 2, vaultKeyRaw: generateVaultKeyRaw() });
+    })(),
+    isCode('PUBLIC_KEY_MISMATCH'),
+  );
+  assert.equal(grant, undefined, 'グラントが作られていない');
+
+  // 差し替えがなければ作れて、C さんが開ける
+  const ok = await createGrant({
+    pins,
+    memberId: 'member_c',
+    recipient: { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey },
+    vaultKeyVersion: 2,
+    vaultKeyRaw: generateVaultKeyRaw(),
+  });
+  await openGrant({ keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey }, ok);
+});
+
+test('P-01 固定していないメンバー宛てには、グラントを作らない（照合と承認が先）', async () => {
+  const memberC = await createMemberKey('c-san-kawa-mori-yama-18');
+  await assert.rejects(
+    createGrant({
+      pins: new MemoryPinStore(),
+      memberId: 'member_c',
+      recipient: { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey },
+      vaultKeyVersion: 1,
+      vaultKeyRaw: generateVaultKeyRaw(),
+    }),
+    isCode('PUBLIC_KEY_NOT_PINNED'),
+  );
+});
+
+test('P-01 鍵を再登録したメンバーは、照合し直して固定するまでグラントを作れない', async () => {
+  const pins = new MemoryPinStore();
+  const oldKey = await newPublicKey();
+  await pinPublicKey(pins, 'member_c', oldKey);
+  const reRegistered = await createMemberKey('c-san-atarashii-kagi-2026');
+  const recipient = { keyId: reRegistered.record.keyId, publicKey: reRegistered.record.publicKey };
+  const args = { pins, memberId: 'member_c', recipient, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() };
+  await assert.rejects(createGrant(args), isCode('PUBLIC_KEY_MISMATCH'));
+  // 照合し直して固定すれば作れる
+  await pinPublicKey(pins, 'member_c', reRegistered.record.publicKey);
+  await createGrant({ ...args, vaultKeyRaw: generateVaultKeyRaw() });
+});
