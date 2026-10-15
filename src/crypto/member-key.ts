@@ -6,7 +6,7 @@ import { wipe, type Bytes } from './bytes.ts';
 import { aesGcmDecrypt, aesGcmEncrypt } from './aead.ts';
 import { CryptoError, decryptFailed } from './errors.ts';
 import { encodeAeadEnvelope, memberKeyAad, parseAeadEnvelope } from './format.ts';
-import { assertKdfParams, deriveWrapKey, newKdfParams, type KdfParams } from './kdf.ts';
+import { assertKdfParams, deriveWrapKey, newKdfParams, normalizePassword, type KdfParams } from './kdf.ts';
 import { newId } from './random.ts';
 
 export const MIN_MASTER_PASSWORD_LENGTH = 14;
@@ -22,7 +22,7 @@ export type MemberKeyRecord = {
 };
 
 export async function createMemberKey(password: string): Promise<{ record: MemberKeyRecord; privateKey: CryptoKey }> {
-  if ([...password].length < MIN_MASTER_PASSWORD_LENGTH) throw new CryptoError('INVALID_INPUT');
+  if ([...normalizePassword(password)].length < MIN_MASTER_PASSWORD_LENGTH) throw new CryptoError('INVALID_INPUT');
 
   const kdf = newKdfParams();
   const keyId = newId('key'); // 暗号化の前に AAD へ入れるので、クライアントで作る

@@ -38,7 +38,7 @@ function memoRecord(): MemberKeyRecord {
     keyId: memo.keyId,
     publicKey: concat(new Uint8Array([0x04]), b64(memo.x), b64(memo.y)),
     encryptedPrivateKey: concat(new Uint8Array([0x01, 0x01]), fromHex(memo.nonce), fromHex(memo.ciphertext)),
-    kdf: { algorithm: 'PBKDF2-HMAC-SHA256', iterations: 600000, salt: fromHex(memo.salt) },
+    kdf: { algorithm: 'PBKDF2-HMAC-SHA256', iterations: 600000, normalization: 'NFC', salt: fromHex(memo.salt) },
   };
 }
 

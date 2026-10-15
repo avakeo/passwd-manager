@@ -31,7 +31,7 @@ test('C-13（API 経由） 管理者が保存した暗号文とグラントを�
       toBase64Url(c.record.publicKey),
       toBase64Url(c.record.encryptedPrivateKey),
       c.record.kdf.algorithm,
-      JSON.stringify({ iterations: c.record.kdf.iterations }),
+      JSON.stringify({ iterations: c.record.kdf.iterations, normalization: c.record.kdf.normalization }),
       toBase64Url(c.record.kdf.salt),
     );
 
@@ -82,7 +82,7 @@ test('C-13（API 経由） 管理者が保存した暗号文とグラントを�
     encryptedPrivateKey: fromBase64Url(me.key.encrypted_private_key),
     kdf: {
       algorithm: me.key.kdf_algorithm as 'PBKDF2-HMAC-SHA256',
-      iterations: (JSON.parse(me.key.kdf_params) as { iterations: number }).iterations,
+      ...(JSON.parse(me.key.kdf_params) as { iterations: number; normalization: 'NFC' }),
       salt: fromBase64Url(me.key.kdf_salt),
     },
   });
@@ -113,7 +113,7 @@ test('Z-04 他のメンバー宛てのグラントは取得できない（GET /v
     t.db.db
       .prepare(
         `INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
-         VALUES (?, ?, 'pk', 'sk', 'PBKDF2-HMAC-SHA256', '{"iterations":600000}', 'salt', 1, 'active', 0)`,
+         VALUES (?, ?, 'pk', 'sk', 'PBKDF2-HMAC-SHA256', '{"iterations":600000,"normalization":"NFC"}', 'salt', 1, 'active', 0)`,
       )
       .run(keyId, m.id);
     t.db.db

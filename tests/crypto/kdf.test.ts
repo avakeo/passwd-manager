@@ -94,7 +94,7 @@ const goodSalt = new Uint8Array(16).fill(1);
 test('C-14 KDF の反復回数が下限（60万回）未満のパラメータは拒否される', async () => {
   assert.equal(PBKDF2_MIN_ITERATIONS, 600000);
   for (const iterations of [599999, 100000, 1, 0, -1, 600000.5, Number.NaN]) {
-    const params = { algorithm: 'PBKDF2-HMAC-SHA256', iterations, salt: goodSalt } as KdfParams;
+    const params = { algorithm: 'PBKDF2-HMAC-SHA256', iterations, normalization: 'NFC', salt: goodSalt } as KdfParams;
     assert.throws(() => assertKdfParams(params), isKdfRejected, `iterations=${iterations}`);
     // 重い計算に入る前に拒否する（1回で終わるはずの呼び出しが即座に失敗する）
     await assert.rejects(deriveWrapKey('correct horse battery staple', params), isKdfRejected);
@@ -103,20 +103,20 @@ test('C-14 KDF の反復回数が下限（60万回）未満のパラメータは
 
 test('C-14 KDF の種類が PBKDF2-HMAC-SHA256 以外なら拒否される', async () => {
   for (const algorithm of ['PBKDF2-HMAC-SHA1', 'argon2id', '']) {
-    const params = { algorithm, iterations: 600000, salt: goodSalt } as unknown as KdfParams;
+    const params = { algorithm, iterations: 600000, normalization: 'NFC', salt: goodSalt } as unknown as KdfParams;
     assert.throws(() => assertKdfParams(params), isKdfRejected, algorithm);
   }
 });
 
 test('C-14 ソルトが16バイトでなければ拒否される', () => {
   for (const salt of [new Uint8Array(0), new Uint8Array(8), new Uint8Array(32)]) {
-    assert.throws(() => assertKdfParams({ algorithm: 'PBKDF2-HMAC-SHA256', iterations: 600000, salt }), isKdfRejected);
+    assert.throws(() => assertKdfParams({ algorithm: 'PBKDF2-HMAC-SHA256', iterations: 600000, normalization: 'NFC', salt }), isKdfRejected);
   }
 });
 
 test('KDF の反復回数が極端に大きいと拒否される（端末を止める攻撃の防止）', () => {
   assert.throws(
-    () => assertKdfParams({ algorithm: 'PBKDF2-HMAC-SHA256', iterations: 1e12, salt: goodSalt }),
+    () => assertKdfParams({ algorithm: 'PBKDF2-HMAC-SHA256', iterations: 1e12, normalization: 'NFC', salt: goodSalt }),
     isKdfRejected,
   );
 });

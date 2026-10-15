@@ -31,4 +31,4 @@
 | 取り出し不可 | `generateKey` は PKCS#8 で書き出すために取り出し可で作る。返す秘密鍵は、取り出し不可で読み込み直したもの。生成直後の取り出し可の鍵オブジェクトは関数の外に出さない |
 | 乱数 | ソルトと鍵IDは `randomBytes` から作る。鍵ペアは WebCrypto の generateKey が作る |
 | メモリ | パスワードの UTF-8、マスターキー、PKCS#8 は使ったら0で上書きする（JavaScript では努力目標） |
-| 未決定 | マスターパスワードの Unicode 正規化（docs/判断待ち.md の1）。今は正規化しない |
+| 正規化 | 2026-10-16 に追加：マスターパスワードを NFC で正規化してから UTF-8 にする（RFC 8265 の OpaqueString に合わせる。前後の空白は削らない）。方式は KDF の設定の normalization に保存し、NFC 以外は拒否する。テストは tests/crypto/normalize.test.ts |
