@@ -19,7 +19,6 @@ Node.js 22.16 以上。依存は実行時が hono、開発時が typescript の2
 
 ```
 npm ci
-npm run vectors:fetch   # HPKE の公開テストベクタを取得する（C-15 に必要。理由は tests/vectors/README.md）
 npm test
 npm run typecheck
 ```
@@ -39,7 +38,7 @@ npm run typecheck
 
 暗号処理は WebCrypto だけで行う。HPKE が必要とする HKDF の Extract と Expand は、WebCrypto の HMAC-SHA256 で RFC 5869 どおりに組み、RFC 5869 のテストベクタで確かめた。楕円曲線の点の計算は自前で書いていない。
 
-**HPKE の適合**：CFRG の公開テストベクタ（Base モード、KEM 0x0010・KDF 0x0001・AEAD 0x0002、257件の暗号文）と一致した（C-15）。そのため、Vault 鍵の受け渡しは RFC 9180 の Base モードに準拠していると書ける。付録 A.3 の組（AEAD 0x0001）とも一致する。
+**HPKE の適合**：CFRG の公開テストベクタ（Base モード、KEM 0x0010・KDF 0x0001・AEAD 0x0002、257件の暗号文）と一致した（C-15）。そのため、Vault 鍵の受け渡しは RFC 9180 の Base モードに準拠していると書ける。テストベクタは、この1件だけを tests/vectors/hpke に置いている（出典とライセンスの扱いは tests/vectors/README.md）。
 
 ## 脅威モデル（要約）
 
@@ -74,7 +73,7 @@ npm run typecheck
 
 ## テスト結果
 
-`npm test`：94件すべて成功（2026-10-15）。テスト名にテスト ID を入れている。提出版で結果を示す7つは次のとおり。
+`npm test`：93件すべて成功（2026-10-16、チェックアウト直後の状態で確認）。テスト名にテスト ID を入れている。提出版で結果を示す7つは次のとおり。
 
 | ID | 内容 | 結果 |
 |---|---|---|
@@ -91,7 +90,7 @@ npm run typecheck
 ## 確かめていないこと、制約
 
 - **API のテストは SQLite で行い、実際の D1 では未確認**。テストでは node:sqlite を D1 と同じ形で包んでいる。特に、バッチの中の `changes()` の動きは、実際の D1 では確かめていない。
-- HPKE のテストベクタは、再配布してよいかを確認できなかったので、リポジトリには置いていない。`npm run vectors:fetch` で、コミットとハッシュを固定して取得する。
+- HPKE のテストベクタは、ライセンス表記を確認できなかった。IETF 文書由来のコード部品の扱いに準じると解釈して、必要な1件だけを引用している。権利者から求めがあれば削除する（tests/vectors/README.md）。
 - Discord ログインを入れていないので、トークンを発行する入口はない。テストは、セッションの行を D1 に入れて本番と同じ認証を通す。
 - JavaScript では、平文の鍵やパスワードを使い終わったあとの0での上書きは努力目標にとどまる（文字列やコピーは消せない）。
 - マスターパスワードの Unicode 正規化は、判断待ち（docs/判断待ち.md）。

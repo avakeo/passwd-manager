@@ -10,7 +10,7 @@
 | src/crypto/public-key.ts | サーバーから来た公開鍵を読み込む。非圧縮形式の65バイトだけを受け付け、曲線上かどうかの検査は WebCrypto に任せる |
 | src/crypto/grant.ts | グラントの作成（sealGrant）、開封（openGrant：取り出し不可）、管理操作用の開封（openGrantForAdmin：生の32バイト） |
 | scripts/fetch-vectors.ts | HPKE のテストベクタを、コミットとハッシュを固定して取得する |
-| tests/vectors/ | Wycheproof の ECDH P-256（Apache-2.0、LICENSE 付き）と、出典・ライセンスの README |
+| tests/vectors/ | Wycheproof の ECDH P-256（Apache-2.0、LICENSE 付き）、HPKE の1件、出典・ライセンスの README |
 | tests/crypto/hpke.test.ts | C-15、C-01（自前の Extract/Expand） |
 | tests/crypto/grant.test.ts | C-13、C-06、C-03（グラント）、C-10（グラント）、C-16（Vault 鍵） |
 | tests/crypto/ecdh.test.ts | C-12 |
@@ -25,7 +25,7 @@
 
 | ID | テスト |
 |---|---|
-| C-15 | CFRG の test-vectors.json の Base モード2組（KEM 0x0010・KDF 0x0001・AEAD 0x0002 と、付録 A.3 と同じ AEAD 0x0001）。enc、shared_secret、key_schedule_context、secret、key、base_nonce と、257件の暗号文を、送り手と受け手の両方で照合する |
+| C-15 | CFRG の test-vectors.json の Base モード、KEM 0x0010・KDF 0x0001・AEAD 0x0002 の1件（tests/vectors/hpke に置いた。2026-10-16 までは付録 A.3 の組も取得して確かめていた）。enc、shared_secret、key_schedule_context、secret、key、base_nonce と、257件の暗号文を、送り手と受け手の両方で照合する |
 | C-01 | 自前の Extract と Expand に、RFC 5869 付録 A.1、A.3 の PRK と OKM を当てる |
 | C-13 | 管理者が Vault 鍵でアイテムを暗号化し、C さん宛てのグラントを作る。C さんがマスターパスワードで秘密鍵を開け、グラントを開いてアイテムを復号する |
 | C-06 | B さんが C さん宛てのグラントを開けない。作った管理者自身も開けない |
@@ -47,4 +47,4 @@ C-15 は、本番と同じ組（KEM 0x0010・KDF 0x0001・AEAD 0x0002）の公�
 | 公開鍵の検査 | 圧縮形式（Wycheproof の acceptable）も拒否している。非圧縮だけを受け付ける方針 |
 | info | 開くときの info は、グラントの行の recipientKeyId ではなく、自分の鍵IDから作る。行の宛先が自分の鍵IDと違えば、復号を試す前に失敗にする |
 | 順番 | この手順では、本体をテストより先に書いてしまった（ほかの手順はテストが先）。テストはコミットの前に書き、全部通ってからコミットしている |
-| 未決定 | HPKE のテストベクタをコミットしないこと（docs/判断待ち.md の2） |
+| テストベクタ | 2026-10-16 の決定で、本番の組の1件だけを tests/vectors/hpke に置いた。ライセンスの扱いは tests/vectors/README.md |

@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fromHex, toBase64Url, toHex, type Bytes } from '../../src/crypto/bytes.ts';
 import { hkdfExpand, hkdfExtract } from '../../src/crypto/hkdf.ts';
 import {
-  AEAD_AES_128_GCM,
   AEAD_AES_256_GCM,
   encapWithEphemeral,
   keyScheduleBase,
@@ -50,11 +49,9 @@ type Vector = {
   encryptions: { aad: string; ct: string; nonce: string; pt: string }[];
 };
 
+// tests/vectors/hpke に置いた1件（出典とライセンスの扱いは tests/vectors/README.md）
 function loadVector(name: string): Vector {
-  const url = new URL(`../vectors/.cache/${name}`, import.meta.url);
-  if (!existsSync(url)) {
-    assert.fail(`HPKE のテストベクタがありません。先に npm run vectors:fetch を実行してください（tests/vectors/README.md）`);
-  }
+  const url = new URL(`../vectors/hpke/${name}`, import.meta.url);
   return (JSON.parse(readFileSync(url, 'utf8')) as { vector: Vector }).vector;
 }
 
@@ -123,10 +120,6 @@ test('C-15 HPKE が RFC 9180 の公開テストベクタと一致する（Base�
   // 本番の入口（openBase）でも、シーケンス番号0の暗号文を開ける
   const e0 = v.encryptions[0]!;
   assert.equal(toHex(await openBase(skR, pkRm, fromHex(v.enc), info, fromHex(e0.aad), fromHex(e0.ct))), e0.pt);
-});
-
-test('C-15 HPKE が RFC 9180 付録 A.3 の組（AEAD 0x0001）のテストベクタと一致する', async () => {
-  await checkVector('hpke-base-p256-sha256-aes128gcm.json', AEAD_AES_128_GCM);
 });
 
 test('本番の sealBase は毎回新しい使い捨て鍵ペアを作る', async () => {
