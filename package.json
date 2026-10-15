@@ -1,0 +1,21 @@
+{
+  "name": "teampw",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "チーム用パスワードマネージャー（E2EE、学習・ポートフォリオ目的）",
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings --test --test-reporter=spec \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "vectors:fetch": "node --experimental-strip-types --no-warnings scripts/fetch-vectors.ts"
+  },
+  "dependencies": {
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
