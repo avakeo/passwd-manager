@@ -47,3 +47,14 @@ test('観点表 取り出し不可：extractable を true にするのは、鍵�
   assert.equal(memberKey.match(/,\s*true,\s*\[/g)!.length, 1);
   assert.match(memberKey, /generateKey\(ECDH_P256, true, \['deriveBits'\]\)/);
 });
+
+test('観点表 ログ：src から console に出力しない（トークン、Authorization ヘッダー、本文をログに出さない）', () => {
+  for (const s of sources) assert.ok(!/\bconsole\./.test(code(s.text)), s.path);
+});
+
+test('観点表 テスト用の認証：本番の入口（worker.ts）は createApp だけを使い、認証の差し込み口を持たない', () => {
+  const worker = code(sources.find((s) => s.path === 'api/worker.ts')!.text);
+  assert.match(worker, /export default createApp\(\);/);
+  const app = code(sources.find((s) => s.path === 'api/app.ts')!.text);
+  assert.match(app, /export function createApp\(\)/); // 引数を取らない
+});
