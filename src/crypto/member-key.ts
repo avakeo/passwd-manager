@@ -3,10 +3,10 @@
 //   秘密鍵はパスワードから作らず、乱数で生成する。パスワード由来のラップ鍵は、秘密鍵を包むためだけに使う。
 
 import { wipe, type Bytes } from './bytes.ts';
-import { aesGcmEncrypt } from './aead.ts';
-import { CryptoError } from './errors.ts';
-import { encodeAeadEnvelope, memberKeyAad } from './format.ts';
-import { deriveWrapKey, newKdfParams, type KdfParams } from './kdf.ts';
+import { aesGcmDecrypt, aesGcmEncrypt } from './aead.ts';
+import { CryptoError, decryptFailed } from './errors.ts';
+import { encodeAeadEnvelope, memberKeyAad, parseAeadEnvelope } from './format.ts';
+import { assertKdfParams, deriveWrapKey, newKdfParams, type KdfParams } from './kdf.ts';
 import { newId } from './random.ts';
 
 export const MIN_MASTER_PASSWORD_LENGTH = 14;
@@ -40,6 +40,24 @@ export async function createMemberKey(password: string): Promise<{ record: Membe
       record: { keyId, publicKey, encryptedPrivateKey: encodeAeadEnvelope('member-key', nonce, ciphertext), kdf },
       privateKey,
     };
+  } finally {
+    wipe(pkcs8);
+  }
+}
+
+// A-3 前半：マスターパスワードで秘密鍵を開け、取り出し不可の ECDH 秘密鍵として読み込む。
+// 順番：形式の確認 → KDF の下限の確認 → AAD を組み立て直す → PBKDF2 → HKDF → AES-GCM で復号 → 取り出し不可で読み込む
+export async function unlockMemberKey(password: string, record: MemberKeyRecord): Promise<CryptoKey> {
+  const { nonce, ciphertext } = parseAeadEnvelope('member-key', record.encryptedPrivateKey);
+  assertKdfParams(record.kdf);
+  const aad = memberKeyAad({ keyId: record.keyId });
+  const wrapKey = await deriveWrapKey(password, record.kdf);
+  // パスワードの誤り、改ざん、行の入れ替えは、どれも同じ DECRYPT_FAILED になる
+  const pkcs8 = await aesGcmDecrypt(wrapKey, nonce, aad, ciphertext);
+  try {
+    return await crypto.subtle.importKey('pkcs8', pkcs8, ECDH_P256, false, ['deriveBits']);
+  } catch {
+    throw decryptFailed();
   } finally {
     wipe(pkcs8);
   }
