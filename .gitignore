@@ -5,3 +5,6 @@ node_modules/
 *.crx
 .env
 .env.*
+
+# 再配布の可否を確認できていない外部ベクタ（npm run vectors:fetch で取得）
+tests/vectors/.cache/
