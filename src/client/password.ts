@@ -1,3 +1,5 @@
+import { randomBytes } from '../crypto/random.ts';
+
 // 乱数は WebCrypto だけ。256 の剰余の偏りをなくすため、使えない値を捨てる。
 export type PasswordOptions = {
   length?: number;
@@ -41,7 +43,7 @@ export function generatePassword(options: PasswordOptions = {}): string {
   const limit = Math.floor(256 / alphabet.length) * alphabet.length;
   const result: string[] = [];
   while (result.length < length) {
-    const random = crypto.getRandomValues(new Uint8Array(Math.min(4096, length - result.length + 32)));
+    const random = randomBytes(Math.min(4096, length - result.length + 32));
     for (const value of random) {
       if (value < limit) result.push(alphabet[value % alphabet.length]!);
       if (result.length === length) break;
@@ -49,3 +51,4 @@ export function generatePassword(options: PasswordOptions = {}): string {
   }
   return result.join('');
 }
+

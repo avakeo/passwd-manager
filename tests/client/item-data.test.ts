@@ -22,5 +22,6 @@ test('I-02 項目の型、未知のプロパティ、日付の厳密さを検査
 });
 test('I-01 UTF-8のJSONを最大65532バイトで制限', () => {
   assert.throws(() => validateItem({ type: 'note', title: '長い', body: 'あ'.repeat(22_000) }), /too large/i);
-  assert.doesNotThrow(() => validateItem({ type: 'note', title: '短い', body: 'あ'.repeat(1000) }));
+  assert.equal(validateItem({ type: 'note', title: '短い', body: 'あ'.repeat(1000) }).type, 'note');
 });
+
