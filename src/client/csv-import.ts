@@ -3,7 +3,7 @@ import { validateItem, type LoginItem } from './item-data.ts';
 
 export type CsvFormat = 'chrome' | 'proton' | '1password';
 export type CsvIssue = { row: number; reason: string };
-export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boolean }[]; errors: CsvIssue[] };
+export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boolean }[]; errors: CsvIssue[]; warnings: CsvIssue[] };
 
 type ParsedRow = { row: number; cells: string[] };
 
@@ -83,6 +83,8 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
   const map = columns(format, header.cells);
   const seen = new Set(existing.map(duplicateKey));
   const items: CsvPreview['items'] = [];
+  const warnings: CsvIssue[] = [];
+  const supported = new Set(Object.values(map));
   for (const entry of parsed.rows) {
     if (entry.cells.length !== header.cells.length) {
       parsed.errors.push({ row: entry.row, reason: 'column count mismatch' }); continue;
@@ -99,11 +101,15 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
       const key = duplicateKey(item);
       items.push({ row: entry.row, item, duplicate: seen.has(key) });
       seen.add(key);
+      if (entry.cells.some((cell, index) => !supported.has(index) && cell.length > 0)) {
+        warnings.push({ row: entry.row, reason: 'unsupported columns have values' });
+      }
     } catch (error) {
       parsed.errors.push({ row: entry.row, reason: error instanceof RangeError ? 'item too large' : 'invalid item' });
     }
   }
   parsed.errors.sort((a, b) => a.row - b.row);
-  return { items, errors: parsed.errors };
+  return { items, errors: parsed.errors, warnings };
 }
+
 

@@ -14,6 +14,7 @@ test('I-02 CSV Proton Passと1Passwordの列名を変換し、未対応のTOTP�
   const proton = importCsvPreview('name,url,username,password,note,totp\nProton,https://p.example/a,u,p,n,123\n', 'proton');
   const one = importCsvPreview('Title,Website,Username,Password,Notes\nOne,https://one.example/path,u,p,n\n', '1password');
   assert.equal(proton.items[0]!.item.title, 'Proton');
+  assert.deepEqual(proton.warnings.map((w) => w.row), [2]);
   assert.equal(proton.items[0]!.item.urls[0], 'https://p.example');
   assert.equal(one.items[0]!.item.title, 'One');
   assert.equal(one.items[0]!.item.urls[0], 'https://one.example');
@@ -37,3 +38,4 @@ test('I-02 閉じ忘れの引用符を報告し、次の物理行の正常な行
   assert.deepEqual(result.errors.map((e) => e.row), [2]);
   assert.deepEqual(result.items.map((x) => x.item.title), ['Good']);
 });
+
