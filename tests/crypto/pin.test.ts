@@ -137,7 +137,7 @@ test('P-01 鍵を再登録したメンバーは、照合し直して固定する
 
 // 攻撃者レビュー #2：サーバーが、公開鍵は固定値のままで、鍵ID だけを別の値にして返す。
 // 通してしまうと、正しい鍵ID 宛てのグラントが作られず、C さんは開けない（承認が気づかれずに失敗する）。
-test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違えばグラントを作らない', async () => {
+test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違えばグラントを作らない（攻撃者レビュー #2）', async () => {
   const memberC = await createMemberKey('c-san-kawa-mori-yama-18');
   const pins = new MemoryPinStore();
   await pinPublicKey(pins, 'member_c', { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey });
