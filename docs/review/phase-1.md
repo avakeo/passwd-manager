@@ -11,7 +11,8 @@
 |---|---|
 | src/client/discord-login.ts | ログインの開始（state と code_verifier は乱数32バイト、S256 の code_challenge、スコープは identify だけ）と、戻ってきた URL の state と戻り先の照合。依存ゼロ |
 | src/api/discord.ts | トークンの交換（クライアントシークレットと PKCE の検証値）、/users/@me、Bot でのロールの確認。Discord の拒否は 400、障害は 502 |
-| src/api/auth-routes.ts | ログイン、更新、TOTP（一時トークンと再確認）、ログアウト、セッションの一覧と無効化、TOTP の登録・確定・解除 |
+| src/api/auth-routes.ts | ログイン、TOTP（一時トークンと再確認）、TOTP の登録・確定・解除のルートと、更新・ログアウト・セッションの一覧と無効化の入口 |
+| src/api/session.ts | セッションの発行、更新（トークンの作り直しと再利用の検知）、無効化、自分のセッションの一覧と無効化 |
 | src/api/totp.ts | RFC 6238（WebCrypto の HMAC-SHA1）、base32、otpauth の URI、シークレットの暗号化（形式とアルゴリズムID 付き、AAD にメンバーID）、回復コード |
 | src/api/auth.ts | 認証（セッション、メンバー、TOTP の有無を1回の結合クエリで）と、認可の表（authorize）、再確認の判定（requireRecentTotp） |
 | src/api/app.ts、env.ts、json.ts、problem.ts | 公開の入口の扱い、Workers の設定の型、本文の読み方、429 と 502 |

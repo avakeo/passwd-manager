@@ -22,9 +22,8 @@ import {
 } from './totp.ts';
 import { wipe } from '../crypto/bytes.ts';
 import { newId, newToken } from '../crypto/random.ts';
+import { issueSession, listSessions, refreshSession, revokeOwnSession, revokeSession } from './session.ts';
 
-export const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
-export const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export const TOTP_MAX_FAILURES = 5;
 export const TOTP_FAILURE_WINDOW_MS = 15 * 60 * 1000;
@@ -42,21 +41,6 @@ function isString(v: unknown, pattern: RegExp): v is string {
 function deviceLabel(v: unknown): string {
   if (typeof v !== 'string' || v.length === 0 || [...v].length > 64) throw new HttpProblem(400);
   return v;
-}
-
-async function issueSession(db: D1Database, memberId: string, scope: 'extension' | 'web', label: string | null, totpVerifiedAt: number | null) {
-  const now = Date.now();
-  const accessToken = newToken();
-  const refreshToken = newToken();
-  await db
-    .prepare(
-      `INSERT INTO sessions (id, member_id, access_token_hash, refresh_token_hash, device_label, created_at, expires_at,
-                             refresh_expires_at, totp_verified_at, scope)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(newId('session'), memberId, await sha256Hex(accessToken), await sha256Hex(refreshToken), label, now, now + ACCESS_TOKEN_TTL_MS, now + REFRESH_TOKEN_TTL_MS, totpVerifiedAt, scope)
-    .run();
-  return { access_token: accessToken, refresh_token: refreshToken, access_expires_at: now + ACCESS_TOKEN_TTL_MS, refresh_expires_at: now + REFRESH_TOKEN_TTL_MS };
 }
 
 function memberView(m: MemberRow) {
@@ -181,40 +165,9 @@ export function registerAuthRoutes(app: Hono<Env>): void {
   app.post('/v1/auth/refresh', async (c) => {
     const body = await readJson(c.req.raw, ['refresh_token']);
     if (!isString(body.refresh_token, TOKEN_PATTERN)) throw new HttpProblem(400);
-    const db = c.env.DB;
-    const now = Date.now();
-    const hash = await sha256Hex(body.refresh_token);
-    const row = await db
-      .prepare(
-        `SELECT s.id, s.revoked_at, s.refresh_expires_at, m.discord_user_id, m.status
-           FROM sessions s JOIN members m ON m.id = s.member_id WHERE s.refresh_token_hash = ?`,
-      )
-      .bind(hash)
-      .first<{ id: string; revoked_at: number | null; refresh_expires_at: number | null; discord_user_id: string; status: string }>();
-    if (!row) {
-      // 使用済みのリフレッシュトークン：盗まれた可能性があるので、そのセッションごと無効にする（A-12）
-      await db.prepare('UPDATE sessions SET revoked_at = ? WHERE prev_refresh_token_hash = ? AND revoked_at IS NULL').bind(now, hash).run();
-      throw new HttpProblem(401);
-    }
-    if (row.revoked_at !== null || row.refresh_expires_at === null || Number(row.refresh_expires_at) <= now) throw new HttpProblem(401);
-    const revoke = () => db.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ?').bind(now, row.id).run();
     // 削除済み、またはロールを外された人は、ここで止めてセッションを無効にする（A-04）
-    if (row.status === 'removed' || !(await hasTeamRole(c.env, row.discord_user_id))) {
-      await revoke();
-      throw new HttpProblem(403);
-    }
-    const accessToken = newToken();
-    const refreshToken = newToken();
-    const res = await db
-      .prepare(
-        `UPDATE sessions SET access_token_hash = ?, refresh_token_hash = ?, prev_refresh_token_hash = ?, expires_at = ?, last_used_at = ?
-          WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL`,
-      )
-      .bind(await sha256Hex(accessToken), await sha256Hex(refreshToken), hash, now + ACCESS_TOKEN_TTL_MS, now, row.id, hash)
-      .run();
-    if (res.meta.changes !== 1) throw new HttpProblem(401); // 同時に更新された
-    // リフレッシュトークンの期限は、ログインから7日のまま延ばさない
-    return c.json({ access_token: accessToken, refresh_token: refreshToken, access_expires_at: now + ACCESS_TOKEN_TTL_MS, refresh_expires_at: Number(row.refresh_expires_at) });
+    const tokens = await refreshSession(c.env.DB, body.refresh_token, async (m) => m.status !== 'removed' && (await hasTeamRole(c.env, m.discordUserId)));
+    return c.json(tokens);
   });
 
   // TOTP のコード。Bearer がなければログインの途中（一時トークン）、あれば管理操作の前の再確認（ステップアップ）
@@ -255,30 +208,20 @@ export function registerAuthRoutes(app: Hono<Env>): void {
   });
 
   app.post('/v1/auth/logout', async (c) => {
-    const p = c.get('principal');
-    await c.env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(Date.now(), p.sessionId).run();
+    await revokeSession(c.env.DB, c.get('principal').sessionId);
     return c.body(null, 204);
   });
 
   // 自分のセッションだけ。トークンのハッシュは返さない
   app.get('/v1/me/sessions', async (c) => {
     const p = c.get('principal');
-    const rows = await c.env.DB.prepare(
-      `SELECT id, device_label, scope, created_at, last_used_at FROM sessions
-        WHERE member_id = ? AND revoked_at IS NULL AND (refresh_expires_at IS NULL OR refresh_expires_at > ?) ORDER BY created_at, id`,
-    )
-      .bind(p.memberId, Date.now())
-      .all<{ id: string; device_label: string | null; scope: string; created_at: number; last_used_at: number | null }>();
-    return c.json({ sessions: rows.results.map((r) => ({ ...r, current: r.id === p.sessionId })) });
+    return c.json({ sessions: await listSessions(c.env.DB, p.memberId, p.sessionId) });
   });
 
   // 他人のセッションは、あってもなくても同じ 404（Z-03）
   app.delete('/v1/me/sessions/:id', async (c) => {
     const p = c.get('principal');
-    const id = c.req.param('id');
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new HttpProblem(404);
-    const res = await c.env.DB.prepare('UPDATE sessions SET revoked_at = ? WHERE id = ? AND member_id = ? AND revoked_at IS NULL').bind(Date.now(), id, p.memberId).run();
-    if (res.meta.changes !== 1) throw new HttpProblem(404);
+    if (!(await revokeOwnSession(c.env.DB, p.memberId, c.req.param('id')))) throw new HttpProblem(404);
     return c.body(null, 204);
   });
 
