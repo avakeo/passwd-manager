@@ -74,27 +74,59 @@ export function createApp() {
   );
   app.use('/v1/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) }));
   app.use('/v1/*', async (c, next) => {
-    c.set('principal', await authenticate(c.env.DB, c.req.header('Authorization'), c.req.method));
+    const allowPending = c.req.method === 'GET' && c.req.path === '/v1/me';
+    c.set('principal', await authenticate(c.env.DB, c.req.header('Authorization'), c.req.method, { allowPending }));
     await next();
   });
 
-  // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）
+  // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
+  // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。
+  // 端末は、固定した値と比べて使う。サーバーの値をそのまま信用しない（P-05）。
+  // 返すのは必要な分だけ（DeepSeek #5・#10）。
+  //   拡張機能：自分の鍵を開くのに要る列。署名鍵の列は管理者だけ。
+  //   Web 用（読み取り専用）：ID と公開鍵だけ。暗号化した秘密鍵と KDF の設定は返さない。
+  //   admin_signer はメンバーだけ（管理者は自分の行を使う）。有効な管理者の署名鍵がちょうど1つでなければ 409。
   app.get('/v1/me', async (c) => {
     const p = c.get('principal');
-    const key = await c.env.DB.prepare(
-      `SELECT id, ecdh_public_key, encrypted_private_key, kdf_algorithm, kdf_params, kdf_salt, format_version
-         FROM member_keys WHERE member_id = ? AND status = 'active'`,
-    )
+    const isAdmin = p.role === 'admin';
+    const columns =
+      p.scope === 'web'
+        ? ['id', 'ecdh_public_key', ...(isAdmin ? ['ecdsa_public_key'] : [])]
+        : [
+            'id',
+            'ecdh_public_key',
+            'encrypted_private_key',
+            ...(isAdmin ? ['ecdsa_public_key', 'encrypted_sign_private_key'] : []),
+            'kdf_algorithm',
+            'kdf_params',
+            'kdf_salt',
+            'format_version',
+          ];
+    const key = await c.env.DB.prepare(`SELECT ${columns.join(', ')} FROM member_keys WHERE member_id = ? AND status = 'active'`)
       .bind(p.memberId)
       .first();
-    return c.json({ id: p.memberId, role: p.role, key });
+    // 今の世代は、承認の照合で管理者の画面と見比べ、最後に見た世代の初期化に使う（DeepSeek #1）
+    const body: Record<string, unknown> = { id: p.memberId, role: p.role, current_vault_key_version: p.currentVaultKeyVersion, key };
+    if (!isAdmin) {
+      const signers = await c.env.DB.prepare(
+        `SELECT m.id AS member_id, k.id AS key_id, k.ecdsa_public_key
+           FROM members m JOIN member_keys k ON k.member_id = m.id
+          WHERE m.role = 'admin' AND m.status = 'active' AND k.status = 'active' AND k.ecdsa_public_key IS NOT NULL
+          LIMIT 2`,
+      ).all();
+      // 0個や2個以上なら、どれかを選んで返すことはしない
+      if (signers.results.length !== 1) throw new HttpProblem(409);
+      body.admin_signer = signers.results[0];
+    }
+    return c.json(body);
   });
 
-  // 鍵の世代と、自分の鍵宛てのグラントだけ（他人宛ては返さない：Z-04）
+  // 鍵の世代と、自分の鍵宛ての署名付きのグラントだけ（他人宛ては返さない：Z-04）
   app.get('/v1/vault', async (c) => {
     const p = c.get('principal');
     const grant = await c.env.DB.prepare(
-      `SELECT g.vault_key_version, g.recipient_key_id, g.ephemeral_public_key, g.wrapped_key, g.format_version,
+      `SELECT g.vault_key_version, g.recipient_key_id, g.ephemeral_public_key, g.wrapped_key, g.signer_key_id, g.signature,
+              g.format_version,
               (SELECT vault_revision FROM vault_meta WHERE id = 1) AS vault_revision
          FROM vault_key_grants g JOIN member_keys k ON k.id = g.recipient_key_id
         WHERE k.member_id = ? AND k.status = 'active' AND g.vault_key_version = ?`,

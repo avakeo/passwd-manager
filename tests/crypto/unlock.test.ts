@@ -102,7 +102,7 @@ test('秘密鍵の暗号文を別の鍵IDの行に移すと失敗する（AAD �
 
 // 攻撃者レビュー #3：サーバーが /v1/me の公開鍵だけを別の点に差し替える。
 // 秘密鍵の AAD に自分の公開鍵の SHA-256 が入っているので、差し替えられた公開鍵ではロック解除できない。
-test('秘密鍵と組でない公開鍵の行では、ロック解除に失敗する（AAD の公開鍵の SHA-256）', async () => {
+test('C-03 秘密鍵と組でない公開鍵の行では、ロック解除に失敗する（AAD の公開鍵の SHA-256。攻撃者レビュー #3）', async () => {
   const { record } = await createMemberKey(PASSWORD);
   const other = await subtle.generateKey(ECDH_P256, true, ['deriveBits']);
   const swapped = { ...record, publicKey: new Uint8Array(await subtle.exportKey('raw', other.publicKey)) };

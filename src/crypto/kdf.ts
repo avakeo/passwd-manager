@@ -1,4 +1,4 @@
-// 鍵導出：マスターパスワード →（PBKDF2-HMAC-SHA256）マスターキー →（HKDF-SHA256）ラップ鍵。
+// 鍵導出：マスターパスワード →（PBKDF2-HMAC-SHA256）マスターキー →（HKDF-SHA256）ラップ鍵、署名鍵のラップ鍵。
 // 仕様書「暗号仕様 > 鍵導出（KDF）」「用途別の鍵」。
 
 import { utf8, wipe, type Bytes } from './bytes.ts';
@@ -15,6 +15,8 @@ export const PASSWORD_NORMALIZATION = 'NFC';
 
 // ラップ鍵の用途ラベル（ドメイン分離）。HPKE の内部ラベル（HPKE-v1…）と重ならない。
 export const WRAP_KEY_INFO = utf8('teampw/v1/private-key-wrap');
+// 管理者の署名用秘密鍵を包む鍵の用途ラベル。ECDH の秘密鍵用のラップ鍵とは別の鍵にする。
+export const SIGN_KEY_WRAP_INFO = utf8('teampw/v1/sign-key-wrap');
 
 export type KdfParams = {
   algorithm: typeof KDF_PBKDF2_SHA256;
@@ -52,8 +54,16 @@ export function normalizePassword(password: string): string {
   return password.normalize(PASSWORD_NORMALIZATION);
 }
 
-// ラップ鍵（AES-256-GCM、取り出し不可）を作る。マスターキーは途中で生のバイト列になるので、使ったらすぐ上書きする。
+// ラップ鍵（AES-256-GCM、取り出し不可）を作る。
 export async function deriveWrapKey(password: string, params: KdfParams): Promise<CryptoKey> {
+  const [wrapKey] = await deriveWrapKeys(password, params, [WRAP_KEY_INFO]);
+  return wrapKey!;
+}
+
+// 1回の PBKDF2 から、用途ラベルごとの鍵（AES-256-GCM、取り出し不可）を HKDF で作る。
+// 管理者は ECDH の秘密鍵と署名用秘密鍵の両方を開くので、重い PBKDF2 を2回しないで済む。
+// マスターキーは途中で生のバイト列になるので、使ったらすぐ上書きする。
+export async function deriveWrapKeys(password: string, params: KdfParams, infos: Bytes[]): Promise<CryptoKey[]> {
   assertKdfParams(params);
   const passwordBytes = utf8(normalizePassword(password));
   let masterKey: Bytes | undefined;
@@ -67,13 +77,19 @@ export async function deriveWrapKey(password: string, params: KdfParams): Promis
       ),
     );
     const hkdfKey = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveKey']);
-    return await crypto.subtle.deriveKey(
-      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: WRAP_KEY_INFO },
-      hkdfKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt'],
-    );
+    const keys: CryptoKey[] = [];
+    for (const info of infos) {
+      keys.push(
+        await crypto.subtle.deriveKey(
+          { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info },
+          hkdfKey,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt', 'decrypt'],
+        ),
+      );
+    }
+    return keys;
   } finally {
     wipe(passwordBytes);
     if (masterKey) wipe(masterKey);

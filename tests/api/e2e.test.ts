@@ -4,54 +4,159 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fromBase64Url, toBase64Url } from '../../src/crypto/bytes.ts';
-import { createMemberKey, unlockMemberKey } from '../../src/crypto/member-key.ts';
-import { createGrant, openGrant } from '../../src/crypto/grant.ts';
-import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { createAdminKey, createMemberKey, unlockMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../src/crypto/member-key.ts';
+import { createGrant, openGrant, type Grant, type GrantSigner } from '../../src/crypto/grant.ts';
+import { MemoryPinStore, fingerprint, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { assertSignerPinned, pinSigner } from '../../src/crypto/signer.ts';
+import { newTrust } from '../helpers/trust.ts';
+import { CryptoError } from '../../src/crypto/errors.ts';
 import { decryptItem, encryptItem } from '../../src/crypto/item.ts';
 import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.ts';
 import { newId } from '../../src/crypto/random.ts';
 import { setup } from '../helpers/api.ts';
 
-test('C-13（API 経由） 管理者が保存した暗号文とグラントを、C さんが API から取得して復号できる', async () => {
+const ADMIN_PASSWORD = 'admin-hoshi-sora-umi-42';
+const C_PASSWORD = 'c-san-kawa-mori-yama-18';
+
+// 鍵は一度だけ作る（PBKDF2 が重いので）
+const adminKey = await createAdminKey(ADMIN_PASSWORD);
+const attackerKey = await createAdminKey('attacker-kuro-yami-99x-zz');
+const cKey = await createMemberKey(C_PASSWORD);
+
+type Setup = ReturnType<typeof setup>;
+
+// 鍵の登録 API は提出版の範囲外なので D1 に直接入れる
+function insertKey(t: Setup, memberId: string, record: MemberKeyRecord | AdminKeyRecord) {
+  const sign = 'signPublicKey' in record ? record : undefined;
+  t.db.db
+    .prepare(
+      `INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
+                                kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', 0)`,
+    )
+    .run(
+      record.keyId,
+      memberId,
+      toBase64Url(record.publicKey),
+      toBase64Url(record.encryptedPrivateKey),
+      sign ? toBase64Url(sign.signPublicKey) : null,
+      sign ? toBase64Url(sign.encryptedSignPrivateKey) : null,
+      record.kdf.algorithm,
+      JSON.stringify({ iterations: record.kdf.iterations, normalization: record.kdf.normalization }),
+      toBase64Url(record.kdf.salt),
+    );
+}
+
+// 承認 API は提出版の範囲外なので D1 に直接入れる
+function insertGrant(t: Setup, grant: Grant) {
+  t.db.db
+    .prepare(
+      `INSERT OR REPLACE INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    )
+    .run(
+      grant.vaultKeyVersion,
+      grant.recipientKeyId,
+      toBase64Url(grant.ephemeralPublicKey),
+      toBase64Url(grant.wrappedKey),
+      grant.signerKeyId,
+      toBase64Url(grant.signature),
+      grant.formatVersion,
+    );
+}
+
+type MeResponse = {
+  id: string;
+  current_vault_key_version: number;
+  key: { id: string; ecdh_public_key: string; encrypted_private_key: string; kdf_algorithm: string; kdf_params: string; kdf_salt: string };
+  admin_signer: { member_id: string; key_id: string; ecdsa_public_key: string } | null;
+};
+type VaultResponse = {
+  current_vault_key_version: number;
+  grant: { vault_key_version: number; recipient_key_id: string; ephemeral_public_key: string; wrapped_key: string; signer_key_id: string; signature: string; format_version: number };
+};
+
+function grantFromApi(g: VaultResponse['grant']): Grant {
+  return {
+    vaultKeyVersion: g.vault_key_version,
+    recipientKeyId: g.recipient_key_id,
+    ephemeralPublicKey: fromBase64Url(g.ephemeral_public_key),
+    wrappedKey: fromBase64Url(g.wrapped_key),
+    signerKeyId: g.signer_key_id,
+    signature: fromBase64Url(g.signature),
+    formatVersion: g.format_version,
+  };
+}
+
+function signerFromApi(s: NonNullable<MeResponse['admin_signer']>) {
+  return { memberId: s.member_id, keyId: s.key_id, publicKey: fromBase64Url(s.ecdsa_public_key) };
+}
+
+// 管理者と C さんを登録し、承認のときの双方向の照合を済ませた状態を作る
+async function approved() {
   const t = setup();
   const adminSession = await t.addMember('active', { role: 'admin' });
   const cSession = await t.addMember('active');
+  insertKey(t, adminSession.id, adminKey.record);
+  insertKey(t, cSession.id, cKey.record);
 
-  // C さん：鍵を作り、公開鍵と暗号化した秘密鍵を登録する（登録 API は提出版の範囲外なので D1 に直接入れる）
-  const cPassword = 'c-san-kawa-mori-yama-18';
-  const c = await createMemberKey(cPassword);
-  t.db.db
-    .prepare(
-      `INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'active', 0)`,
-    )
-    .run(
-      c.record.keyId,
-      cSession.id,
-      toBase64Url(c.record.publicKey),
-      toBase64Url(c.record.encryptedPrivateKey),
-      c.record.kdf.algorithm,
-      JSON.stringify({ iterations: c.record.kdf.iterations, normalization: c.record.kdf.normalization }),
-      toBase64Url(c.record.kdf.salt),
-    );
+  // 管理者の端末：自分の組を固定し、世代1で初期化済み（初期化のときに世代1を作った）
+  const adminPin = { memberId: adminSession.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey };
+  const adminTrust = newTrust(adminSession.id);
+  await pinSigner(adminTrust, adminPin, 1);
 
-  // 管理者：照合して固定し、グラントを作る（承認 API は提出版の範囲外なので D1 に直接入れる）
+  // 承認のときの双方向の照合。C さんの端末は、API から受け取った管理者の署名鍵のフィンガープリントと今の世代を、
+  // 管理者の画面（管理者の端末が持つ値）と見比べ、一致したら組を固定し、その世代で最後に見た世代を初期化する
+  const me = (await (await t.request('GET', '/v1/me', cSession.token)).json()) as MeResponse;
+  const fromServer = signerFromApi(me.admin_signer!);
+  assert.equal(await fingerprint(fromServer.publicKey), await fingerprint(adminKey.record.signPublicKey));
+  assert.equal(me.current_vault_key_version, await adminTrust.generations.get());
+  const cTrust = newTrust(cSession.id);
+  await pinSigner(cTrust, fromServer, me.current_vault_key_version);
+
+  // 管理者の端末は、C さんの公開鍵を照合して固定する
   const pins = new MemoryPinStore();
-  await pinPublicKey(pins, cSession.id, { keyId: c.record.keyId, publicKey: c.record.publicKey });
-  const vaultKeyRaw = generateVaultKeyRaw();
-  const grant = await createGrant({
-    pins,
-    memberId: cSession.id,
-    recipient: { keyId: c.record.keyId, publicKey: c.record.publicKey },
-    vaultKeyVersion: 1,
-    vaultKeyRaw,
+  await pinPublicKey(pins, cSession.id, { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey });
+  const signer: GrantSigner = { memberId: adminSession.id, keyId: adminKey.record.keyId, privateKey: adminKey.signPrivateKey, trust: adminTrust };
+  return { t, adminSession, cSession, cTrust, pins, signer };
+}
+
+// C さん：API から取ってきた自分の鍵と、自分宛てのグラントだけで、Vault 鍵を開く
+async function cOpensFromApi(t: Setup, token: string, cTrust: Parameters<typeof openGrant>[1]) {
+  const me = (await (await t.request('GET', '/v1/me', token)).json()) as MeResponse;
+  const vault = (await (await t.request('GET', '/v1/vault', token)).json()) as VaultResponse;
+  const publicKey = fromBase64Url(me.key.ecdh_public_key);
+  const cPrivate = await unlockMemberKey(C_PASSWORD, {
+    keyId: me.key.id,
+    publicKey,
+    encryptedPrivateKey: fromBase64Url(me.key.encrypted_private_key),
+    kdf: {
+      algorithm: me.key.kdf_algorithm as 'PBKDF2-HMAC-SHA256',
+      ...(JSON.parse(me.key.kdf_params) as { iterations: number; normalization: 'NFC' }),
+      salt: fromBase64Url(me.key.kdf_salt),
+    },
   });
-  t.db.db
-    .prepare(
-      `INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, format_version, created_at)
-       VALUES (1, ?, ?, ?, 1, 0)`,
-    )
-    .run(grant.recipientKeyId, toBase64Url(grant.ephemeralPublicKey), toBase64Url(grant.wrappedKey));
+  // サーバーが返す管理者の鍵が、固定と違っていれば止める（P-05）
+  await assertSignerPinned(cTrust, signerFromApi(me.admin_signer!));
+  return openGrant({ memberId: me.id, keyId: me.key.id, publicKey, privateKey: cPrivate }, cTrust, grantFromApi(vault.grant), vault.current_vault_key_version);
+}
+
+test('C-13（API 経由） 管理者が保存した暗号文と署名付きのグラントを、C さんが API から取得して確かめ、復号できる', async () => {
+  const { t, adminSession, cSession, cTrust, pins, signer } = await approved();
+
+  // 管理者：グラントを作って署名する
+  const vaultKeyRaw = generateVaultKeyRaw();
+  insertGrant(
+    t,
+    await createGrant({
+      pins,
+      signer,
+      memberId: cSession.id,
+      recipient: { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey },
+      vaultKeyVersion: 1,
+      vaultKeyRaw: vaultKeyRaw.slice(),
+    }),
+  );
 
   // 管理者：アイテムを暗号化して API で保存する
   const vaultKey = await importVaultKey(vaultKeyRaw);
@@ -70,31 +175,7 @@ test('C-13（API 経由） 管理者が保存した暗号文とグラントを�
   const dump = JSON.stringify(t.db.db.prepare('SELECT * FROM items').all());
   for (const secret of ['Tr7#qLm2!vX9pK', 'team@example.com', '社内Wiki']) assert.ok(!dump.includes(secret));
 
-  // C さん：API から自分宛てのグラントとアイテムを取り、マスターパスワードだけで復号する
-  const me = (await (await t.request('GET', '/v1/me', cSession.token)).json()) as { key: { id: string; ecdh_public_key: string; encrypted_private_key: string; kdf_algorithm: string; kdf_params: string; kdf_salt: string } };
-  const vault = (await (await t.request('GET', '/v1/vault', cSession.token)).json()) as {
-    current_vault_key_version: number;
-    grant: { vault_key_version: number; recipient_key_id: string; ephemeral_public_key: string; wrapped_key: string };
-  };
-  const cPrivate = await unlockMemberKey(cPassword, {
-    keyId: me.key.id,
-    publicKey: fromBase64Url(me.key.ecdh_public_key),
-    encryptedPrivateKey: fromBase64Url(me.key.encrypted_private_key),
-    kdf: {
-      algorithm: me.key.kdf_algorithm as 'PBKDF2-HMAC-SHA256',
-      ...(JSON.parse(me.key.kdf_params) as { iterations: number; normalization: 'NFC' }),
-      salt: fromBase64Url(me.key.kdf_salt),
-    },
-  });
-  const cVaultKey = await openGrant(
-    { keyId: me.key.id, publicKey: fromBase64Url(me.key.ecdh_public_key), privateKey: cPrivate },
-    {
-      vaultKeyVersion: vault.grant.vault_key_version,
-      recipientKeyId: vault.grant.recipient_key_id,
-      ephemeralPublicKey: fromBase64Url(vault.grant.ephemeral_public_key),
-      wrappedKey: fromBase64Url(vault.grant.wrapped_key),
-    },
-  );
+  const cVaultKey = await cOpensFromApi(t, cSession.token, cTrust);
   const list = (await (await t.request('GET', '/v1/items?since=0', cSession.token)).json()) as {
     items: { id: string; vault_key_version: number; ciphertext: string }[];
   };
@@ -103,6 +184,56 @@ test('C-13（API 経由） 管理者が保存した暗号文とグラントを�
     await decryptItem(cVaultKey, { itemId: got.id, vaultKeyVersion: got.vault_key_version }, fromBase64Url(got.ciphertext)),
     item,
   );
+  assert.equal(await cTrust.generations.get(), 1);
+});
+
+// 攻撃者レビュー #1 を API 経由で：乗っ取られたサーバーが、C さん宛てのグラントの行を、
+// 管理者の鍵ID を名乗って攻撃者の鍵で署名した偽グラントに書き換える
+test('C-18（API 経由） サーバーが書き換えた偽グラントを、C さんは開かずに拒否する（攻撃者レビュー #1）', async () => {
+  const { t, cSession, cTrust } = await approved();
+  const attackerPins = new MemoryPinStore();
+  await pinPublicKey(attackerPins, cSession.id, { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey });
+  // 攻撃者の手元の端末（管理者の名前と鍵ID を名乗り、自分の署名鍵を固定したことにする）
+  const attackerTrust = newTrust('member_1');
+  await pinSigner(attackerTrust, { memberId: 'member_1', keyId: adminKey.record.keyId, publicKey: attackerKey.record.signPublicKey }, 1);
+  const evil = await createGrant({
+    pins: attackerPins,
+    signer: { memberId: 'member_1', keyId: adminKey.record.keyId, privateKey: attackerKey.signPrivateKey, trust: attackerTrust },
+    memberId: cSession.id,
+    recipient: { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey },
+    vaultKeyVersion: 1, // 本物の C さん宛ての行（世代1）を置き換える
+    vaultKeyRaw: generateVaultKeyRaw(),
+  });
+  insertGrant(t, evil);
+  await assert.rejects(cOpensFromApi(t, cSession.token, cTrust), (e: unknown) => e instanceof CryptoError && e.code === 'SIGNATURE_INVALID');
+  assert.equal(await cTrust.generations.get(), 1, '照合のときに初期化した世代のまま');
+});
+
+test('P-05（API 経由） サーバーが /v1/me で返す管理者の署名用公開鍵を差し替えると、C さんの端末が検知する', async () => {
+  const { t, cSession, cTrust } = await approved();
+  t.db.db
+    .prepare(`UPDATE member_keys SET ecdsa_public_key = ? WHERE id = ?`)
+    .run(toBase64Url(attackerKey.record.signPublicKey), adminKey.record.keyId);
+  await assert.rejects(cOpensFromApi(t, cSession.token, cTrust), (e: unknown) => e instanceof CryptoError && e.code === 'SIGNER_MISMATCH');
+});
+
+test('双方向の照合のため、承認待ちのメンバーも GET /v1/me で管理者の署名用公開鍵を受け取れる（Vault は 403 のまま）', async () => {
+  const t = setup();
+  const adminSession = await t.addMember('active', { role: 'admin' });
+  insertKey(t, adminSession.id, adminKey.record);
+  const pending = await t.addMember('pending');
+  const res = await t.request('GET', '/v1/me', pending.token);
+  assert.equal(res.status, 200);
+  const me = (await res.json()) as MeResponse;
+  assert.deepEqual(me.admin_signer, {
+    member_id: adminSession.id,
+    key_id: adminKey.record.keyId,
+    ecdsa_public_key: toBase64Url(adminKey.record.signPublicKey),
+  });
+  assert.equal((await t.request('GET', '/v1/vault', pending.token)).status, 403);
+  // 削除済みは /v1/me も 403
+  const removed = await t.addMember('removed');
+  assert.equal((await t.request('GET', '/v1/me', removed.token)).status, 403);
 });
 
 test('Z-04 他のメンバー宛てのグラントは取得できない（GET /v1/vault は自分の鍵宛てのものだけを返す）', async () => {
@@ -118,12 +249,74 @@ test('Z-04 他のメンバー宛てのグラントは取得できない（GET /v
       .run(keyId, m.id);
     t.db.db
       .prepare(
-        `INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, format_version, created_at)
-         VALUES (1, ?, 'enc', ?, 1, 0)`,
+        `INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at)
+         VALUES (1, ?, 'enc', ?, 'key_admin', 'sig', 1, 0)`,
       )
       .run(keyId, `wrapped_for_${keyId}`);
   }
   const vault = (await (await t.request('GET', '/v1/vault', a.token)).json()) as { grant: { recipient_key_id: string; wrapped_key: string } };
   assert.equal(vault.grant.recipient_key_id, 'key_a');
   assert.equal(vault.grant.wrapped_key, 'wrapped_for_key_a');
+});
+
+// DeepSeek #5・#10：GET /v1/me が返すのは必要な分だけ。読み取り専用の Web 用トークンには、暗号化した秘密鍵を返さない
+// （Web ページに XSS があっても、拡張機能の暗号材料を持ち出させない）。
+test('Z-08 GET /v1/me は必要な分だけを返し、Web 用トークンには暗号化した秘密鍵（ECDH と署名の両方）を返さない（DeepSeek #5・#10）', async () => {
+  const t = setup();
+  const admin = await t.addMember('active', { role: 'admin' });
+  const adminWeb = await t.addMember('active', { role: 'admin', scope: 'web' });
+  t.db.db.prepare(`UPDATE sessions SET member_id = ? WHERE id = 'session_2'`).run(admin.id);
+  const c = await t.addMember('active');
+  const cWeb = await t.addMember('active', { scope: 'web' });
+  t.db.db.prepare(`UPDATE sessions SET member_id = ? WHERE id = 'session_4'`).run(c.id);
+  insertKey(t, admin.id, adminKey.record);
+  insertKey(t, c.id, cKey.record);
+  const me = async (token: string) => (await (await t.request('GET', '/v1/me', token)).json()) as Record<string, unknown> & { key: Record<string, unknown> };
+
+  // 拡張機能のメンバー：自分の鍵を開くのに要るものと、照合用の管理者の組。署名鍵の列は持たない
+  const cExt = await me(c.token);
+  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(cExt.key).sort(), ['encrypted_private_key', 'format_version', 'id', 'kdf_algorithm', 'kdf_params', 'kdf_salt', 'ecdh_public_key'].sort());
+
+  // 拡張機能の管理者：署名鍵も開く。照合用の管理者の組は要らない（自分の行を使う）
+  const adminExt = await me(admin.token);
+  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'role']);
+  assert.ok('encrypted_sign_private_key' in adminExt.key && 'ecdsa_public_key' in adminExt.key);
+
+  // Web 用：暗号化した秘密鍵も、ロック解除に使う KDF の設定も返さない
+  for (const [name, token] of [['メンバー', cWeb.token], ['管理者', adminWeb.token]] as const) {
+    const body = await me(token);
+    assert.deepEqual(Object.keys(body.key).sort(), name === '管理者' ? ['ecdh_public_key', 'ecdsa_public_key', 'id'] : ['ecdh_public_key', 'id'], name);
+    const dump = JSON.stringify(body);
+    for (const secret of [toBase64Url(cKey.record.encryptedPrivateKey), toBase64Url(adminKey.record.encryptedPrivateKey), toBase64Url(adminKey.record.encryptedSignPrivateKey)]) {
+      assert.ok(!dump.includes(secret), `${name}：暗号化した秘密鍵が含まれている`);
+    }
+  }
+});
+
+// DeepSeek #5：管理者の署名鍵の行を ORDER BY なしの1件目で選んでいたので、行が複数あると別の鍵を返しえた。
+test('P-10 有効な管理者の署名鍵がちょうど1つでなければ、GET /v1/me は管理者の組を返さずにエラーにする（DeepSeek #5）', async () => {
+  const t = setup();
+  const c = await t.addMember('active');
+  insertKey(t, c.id, cKey.record);
+  // 0個（管理者の鍵がまだない）
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 409);
+
+  // 1個なら返す
+  const admin = await t.addMember('active', { role: 'admin' });
+  insertKey(t, admin.id, adminKey.record);
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 200);
+
+  // 削除済みの管理者の鍵は数えない
+  const removedAdmin = await t.addMember('removed', { role: 'admin' });
+  insertKey(t, removedAdmin.id, { ...attackerKey.record, keyId: 'key_removed_admin' });
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 200);
+
+  // 2個（サーバーが別の管理者の行を足した）
+  const second = await t.addMember('active', { role: 'admin' });
+  insertKey(t, second.id, attackerKey.record);
+  const res = await t.request('GET', '/v1/me', c.token);
+  assert.equal(res.status, 409);
+  const body = JSON.stringify(await res.json());
+  assert.ok(!body.includes(toBase64Url(attackerKey.record.signPublicKey)) && !body.includes(toBase64Url(adminKey.record.signPublicKey)));
 });
