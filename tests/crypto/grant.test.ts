@@ -129,3 +129,29 @@ test('管理操作では、グラントを開き直して生の Vault 鍵を得�
   const env = await encryptItem(await importVaultKey(raw), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(cKey, ctx, env), { type: 'note', title: 't', body: 'b' });
 });
+
+// 攻撃者レビュー #1。仕様書「脅威モデル」の範囲外の表にある「悪意あるサーバーによる偽Vault鍵の配布」が、今は成功することを確かめる。
+// HPKE の Base モードでは、受け手は「誰が包んだか」を確かめない。宛先の公開鍵は公開情報なので、サーバーも管理者と同じ計算でグラントを作れる。
+// 対策（管理者署名）を入れたら、このテストは「拒否される」ことを確かめる形に書き換える。
+test('既知の弱点（範囲外）：乗っ取られたサーバーは既存メンバー宛ての偽グラントを作れ、メンバーは気づかずに開いて使う', async () => {
+  // 攻撃者：D1 から C さんの鍵ID と公開鍵を読み、自分の端末で固定したことにして、自分が知る Vault 鍵を包む
+  const attackerPins = new MemoryPinStore();
+  await pinPublicKey(attackerPins, 'member_c', memberC.record.publicKey);
+  const evilVaultKeyRaw = generateVaultKeyRaw();
+  const evilGrant = await createGrant({
+    pins: attackerPins,
+    memberId: 'member_c',
+    recipient: recipient(memberC),
+    vaultKeyVersion: 1,
+    vaultKeyRaw: evilVaultKeyRaw.slice(),
+  });
+
+  // C さん：グラントの行が差し替えられていても、本物と区別できずに開ける
+  const cVaultKey = await openGrant(ownKey(memberC), evilGrant);
+
+  // C さんがその後に保存したアイテムは、攻撃者が復号できる
+  const ctx = { itemId: 'item_after_attack', vaultKeyVersion: 1 };
+  const item = { type: 'login' as const, title: '経理', username: 'c@example.com', password: 'Zq8!mW3#rT6p' };
+  const ciphertext = await encryptItem(cVaultKey, ctx, item);
+  assert.deepEqual(await decryptItem(await importVaultKey(evilVaultKeyRaw), ctx, ciphertext), item);
+});
