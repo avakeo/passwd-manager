@@ -83,6 +83,7 @@ export type Grant = {
   wrappedKey: Bytes; // 形式、アルゴリズムID、暗号文と認証タグ
   signerKeyId: string; // 署名した管理者の鍵ID
   signature: Bytes; // 形式、アルゴリズムID、署名
+  formatVersion: number; // 行の format_version。知らない値なら開かない（C-10）
 };
 
 // サーバーから受け取った宛先の鍵ID と公開鍵
@@ -142,6 +143,7 @@ export async function createGrant(args: {
     wrappedKey,
     signerKeyId: args.signer.keyId,
     signature: encodeSignatureEnvelope(await signMessage(args.signer.privateKey, message)),
+    formatVersion: FORMAT_V1,
   };
 }
 
@@ -166,6 +168,8 @@ function assertGrantShape(grant: Grant): void {
   if (!(wrappedKey instanceof Uint8Array) || wrappedKey.length !== GRANT_ENVELOPE_LENGTH) throw new CryptoError('MALFORMED');
   if (typeof recipientKeyId !== 'string' || typeof signerKeyId !== 'string') throw new CryptoError('MALFORMED');
   assertVersion(grant.vaultKeyVersion);
+  // 行の format_version も、署名する中身の形式（v1）と一致しなければならない（DeepSeek #12）
+  if (grant.formatVersion !== FORMAT_V1) throw new CryptoError('UNSUPPORTED_FORMAT');
 }
 
 // currentVaultKeyVersion は、サーバーが /v1/vault で「今の世代」として返した値。

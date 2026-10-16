@@ -52,7 +52,7 @@ function insertGrant(t: Setup, grant: Grant) {
   t.db.db
     .prepare(
       `INSERT OR REPLACE INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, 0)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
     )
     .run(
       grant.vaultKeyVersion,
@@ -61,6 +61,7 @@ function insertGrant(t: Setup, grant: Grant) {
       toBase64Url(grant.wrappedKey),
       grant.signerKeyId,
       toBase64Url(grant.signature),
+      grant.formatVersion,
     );
 }
 
@@ -72,7 +73,7 @@ type MeResponse = {
 };
 type VaultResponse = {
   current_vault_key_version: number;
-  grant: { vault_key_version: number; recipient_key_id: string; ephemeral_public_key: string; wrapped_key: string; signer_key_id: string; signature: string };
+  grant: { vault_key_version: number; recipient_key_id: string; ephemeral_public_key: string; wrapped_key: string; signer_key_id: string; signature: string; format_version: number };
 };
 
 function grantFromApi(g: VaultResponse['grant']): Grant {
@@ -83,6 +84,7 @@ function grantFromApi(g: VaultResponse['grant']): Grant {
     wrappedKey: fromBase64Url(g.wrapped_key),
     signerKeyId: g.signer_key_id,
     signature: fromBase64Url(g.signature),
+    formatVersion: g.format_version,
   };
 }
 

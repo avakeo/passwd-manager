@@ -236,6 +236,7 @@ test('既知解 決まったグラントを、固定の受け手の秘密鍵で�
     wrappedKey: fromHex(kat.wrappedKey),
     signerKeyId: admin.record.keyId,
     signature: new Uint8Array(0),
+    formatVersion: 1,
   };
   const katMember = { record: { ...memberC.record, keyId: kat.recipientKeyId, publicKey: fromHex(kat.pkR) }, privateKey: own.privateKey };
   const grant: Grant = { ...unsigned, signature: await resign(unsigned, katMember) };

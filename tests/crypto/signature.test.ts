@@ -420,7 +420,7 @@ test('C-25 どんな形のグラントを渡しても、暗号コアの決めた
   const grant = await grantToC(adminSigner, 1);
   const rnd = (max: number) => crypto.getRandomValues(new Uint8Array(Math.floor(Math.random() * max)));
   const odd: unknown[] = [undefined, null, 0, -1, 1.5, NaN, Infinity, '1', 'key|x', '', {}, [], new Uint8Array(0), new Uint8Array(70000), 2 ** 53];
-  const fields = ['vaultKeyVersion', 'recipientKeyId', 'ephemeralPublicKey', 'wrappedKey', 'signerKeyId', 'signature'] as const;
+  const fields = ['vaultKeyVersion', 'recipientKeyId', 'ephemeralPublicKey', 'wrappedKey', 'signerKeyId', 'signature', 'formatVersion'] as const;
   const variants: unknown[] = [null, undefined, 'grant', 1, {}];
   for (const f of fields) {
     for (const v of odd) variants.push({ ...grant, [f]: v });
@@ -445,4 +445,14 @@ test('C-25 どんな形のグラントを渡しても、暗号コアの決めた
       }
     }
   }
+});
+
+// DeepSeek #12：署名する中身には形式 v1 を定数で入れているので、行の format_version が 2 でも中身が v1 なら通ってしまっていた。
+test('C-10 グラントの行の format_version が知らない値なら、開かずに拒否する（DeepSeek #12）', async () => {
+  const grant = await grantToC(adminSigner, 1);
+  assert.equal(grant.formatVersion, FORMAT_V1);
+  for (const formatVersion of [0, 2, 255]) {
+    await assert.rejects(openGrant(cOwn(), await trusted(), ...served({ ...grant, formatVersion })), isCode('UNSUPPORTED_FORMAT'), `format_version ${formatVersion}`);
+  }
+  await openGrant(cOwn(), await trusted(), ...served(grant));
 });
