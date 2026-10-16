@@ -6,6 +6,7 @@ import { wipe, type Bytes } from './bytes.ts';
 import { aesGcmDecrypt, aesGcmEncrypt } from './aead.ts';
 import { CryptoError, decryptFailed } from './errors.ts';
 import { encodeAeadEnvelope, memberKeyAad, parseAeadEnvelope } from './format.ts';
+import { PUBLIC_KEY_LENGTH } from './public-key.ts';
 import { assertKdfParams, deriveWrapKey, newKdfParams, normalizePassword, type KdfParams } from './kdf.ts';
 import { newId } from './random.ts';
 
@@ -21,6 +22,13 @@ export type MemberKeyRecord = {
   kdf: KdfParams; // 平文で保存
 };
 
+// 秘密鍵の AAD。鍵ID と、組になる公開鍵の SHA-256 を入れる。
+async function privateKeyAad(keyId: string, publicKey: Bytes): Promise<Bytes> {
+  if (publicKey.length !== PUBLIC_KEY_LENGTH) throw new CryptoError('INVALID_INPUT');
+  const publicKeySha256 = new Uint8Array(await crypto.subtle.digest('SHA-256', publicKey));
+  return memberKeyAad({ keyId, publicKeySha256 });
+}
+
 export async function createMemberKey(password: string): Promise<{ record: MemberKeyRecord; privateKey: CryptoKey }> {
   if ([...normalizePassword(password)].length < MIN_MASTER_PASSWORD_LENGTH) throw new CryptoError('INVALID_INPUT');
 
@@ -33,7 +41,7 @@ export async function createMemberKey(password: string): Promise<{ record: Membe
   const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
   try {
     const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
-    const { nonce, ciphertext } = await aesGcmEncrypt(wrapKey, memberKeyAad({ keyId }), pkcs8);
+    const { nonce, ciphertext } = await aesGcmEncrypt(wrapKey, await privateKeyAad(keyId, publicKey), pkcs8);
     // 手元で使い続ける秘密鍵は、取り出し不可で読み込み直す
     const privateKey = await crypto.subtle.importKey('pkcs8', pkcs8, ECDH_P256, false, ['deriveBits']);
     return {
@@ -46,13 +54,13 @@ export async function createMemberKey(password: string): Promise<{ record: Membe
 }
 
 // A-3 前半：マスターパスワードで秘密鍵を開け、取り出し不可の ECDH 秘密鍵として読み込む。
-// 順番：形式の確認 → KDF の下限の確認 → AAD を組み立て直す → PBKDF2 → HKDF → AES-GCM で復号 → 取り出し不可で読み込む
+// 順番：形式の確認 → KDF の下限の確認 → AAD を組み立て直す（鍵ID と、行の公開鍵の SHA-256） → PBKDF2 → HKDF → AES-GCM で復号 → 取り出し不可で読み込む
 export async function unlockMemberKey(password: string, record: MemberKeyRecord): Promise<CryptoKey> {
   const { nonce, ciphertext } = parseAeadEnvelope('member-key', record.encryptedPrivateKey);
   assertKdfParams(record.kdf);
-  const aad = memberKeyAad({ keyId: record.keyId });
+  const aad = await privateKeyAad(record.keyId, record.publicKey);
   const wrapKey = await deriveWrapKey(password, record.kdf);
-  // パスワードの誤り、改ざん、行の入れ替えは、どれも同じ DECRYPT_FAILED になる
+  // パスワードの誤り、改ざん、行の入れ替え、公開鍵の差し替えは、どれも同じ DECRYPT_FAILED になる
   const pkcs8 = await aesGcmDecrypt(wrapKey, nonce, aad, ciphertext);
   try {
     return await crypto.subtle.importKey('pkcs8', pkcs8, ECDH_P256, false, ['deriveBits']);

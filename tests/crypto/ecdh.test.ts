@@ -56,9 +56,9 @@ test('C-12 不正な公開鍵は固定できず、宛先にしたグラントも
   const notOnCurve = fromHex(cases.find((t) => t.result === 'invalid' && t.public.length === 130)!.public);
   const pins = new MemoryPinStore();
   const isInvalid = (e: unknown) => e instanceof CryptoError && e.code === 'INVALID_PUBLIC_KEY';
-  await assert.rejects(pinPublicKey(pins, 'member_bad', notOnCurve), isInvalid);
+  await assert.rejects(pinPublicKey(pins, 'member_bad', { keyId: 'key_bad', publicKey: notOnCurve }), isInvalid);
   // 固定の保存先が壊れて不正な値が入っていても、包む前の読み込みで拒否する
-  await pins.set('member_bad', notOnCurve);
+  await pins.set('member_bad', { keyId: 'key_bad', publicKey: notOnCurve });
   await assert.rejects(
     createGrant({ pins, memberId: 'member_bad', recipient: { keyId: 'key_bad', publicKey: notOnCurve }, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() }),
     isInvalid,

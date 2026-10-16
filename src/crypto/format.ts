@@ -1,7 +1,7 @@
 // 保存形式（形式バージョンとアルゴリズムIDのヘッダー）、ID、AAD の組み立て。
 // 仕様書「暗号仕様 > 共通の規則」「アイテムの暗号化」「メンバー鍵ペア」。
 
-import { concat, utf8, type Bytes } from './bytes.ts';
+import { concat, toHex, utf8, type Bytes } from './bytes.ts';
 import { CryptoError } from './errors.ts';
 
 export const FORMAT_V1 = 0x01;
@@ -66,7 +66,7 @@ export function parseGrantEnvelope(bytes: Uint8Array): Bytes {
 }
 
 export type ItemContext = { itemId: string; vaultKeyVersion: number };
-export type MemberKeyContext = { keyId: string };
+export type MemberKeyContext = { keyId: string; publicKeySha256: Bytes };
 
 // v1|item|<アイテムID>|<世代>
 export function itemAad(ctx: ItemContext): Bytes {
@@ -75,8 +75,10 @@ export function itemAad(ctx: ItemContext): Bytes {
   return utf8(`v${FORMAT_V1}|item|${ctx.itemId}|${ctx.vaultKeyVersion}`);
 }
 
-// v1|member-key|<鍵ID>
+// v1|member-key|<鍵ID>|<公開鍵（65バイト）の SHA-256 の16進>
+// 公開鍵の SHA-256 を入れるので、サーバーが公開鍵だけを差し替えた行では、ロック解除に失敗する。
 export function memberKeyAad(ctx: MemberKeyContext): Bytes {
   assertId(ctx.keyId);
-  return utf8(`v${FORMAT_V1}|member-key|${ctx.keyId}`);
+  if (ctx.publicKeySha256.length !== 32) throw new CryptoError('INVALID_INPUT');
+  return utf8(`v${FORMAT_V1}|member-key|${ctx.keyId}|${toHex(ctx.publicKeySha256)}`);
 }

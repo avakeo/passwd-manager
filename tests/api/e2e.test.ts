@@ -37,7 +37,7 @@ test('C-13（API 経由） 管理者が保存した暗号文とグラントを�
 
   // 管理者：照合して固定し、グラントを作る（承認 API は提出版の範囲外なので D1 に直接入れる）
   const pins = new MemoryPinStore();
-  await pinPublicKey(pins, cSession.id, c.record.publicKey);
+  await pinPublicKey(pins, cSession.id, { keyId: c.record.keyId, publicKey: c.record.publicKey });
   const vaultKeyRaw = generateVaultKeyRaw();
   const grant = await createGrant({
     pins,

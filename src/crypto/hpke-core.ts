@@ -4,6 +4,8 @@
 // テストベクタを確かめるために必要な口なので、本番の経路からは使わせない。
 // src の中でこのファイルを import してよいのは src/crypto/hpke.ts だけ（tests/crypto/guard.test.ts で検査する）。
 // hpke.ts は、使い捨て鍵ペアを必ず内部で生成してから、ここを呼ぶ。
+// この口をテスト専用のファイルへ移すと、テストベクタで確かめる処理と本番の処理が別の関数になる。
+// 同じ関数を通すことを優先して、ここに置いたままにする（攻撃者レビュー #4）。
 
 import { concat, i2osp, utf8, wipe, type Bytes } from './bytes.ts';
 import { hkdfExpand, hkdfExtract } from './hkdf.ts';
