@@ -16,7 +16,9 @@
 | 8 | 未対応のCSVデータ | TOTPやタグ等は取り込まない。非空の未対応列がある行は警告する。確認画面で利用者が気づけるようにする。 | I-02 |
 | 9 | クリップボードの判定 | コピー時刻から60,000ms以上経ち、現在の内容がコピーした文字列と同じ非空文字列なら消去可と返す。タイマー・OSの読み書きはフェーズ3。 | E-10、E-12 |
 
-CSVの解析・変換には仕様書に専用テストIDがない。現時点のテスト名では入力の形を扱う I-02 を関連IDとして付けたが、仕様書の I-02 は API の不正JSON等を指す。フェーズ3でCSV専用IDを決める。`n`nCSV列の確認に使った公開資料：[1Password CSV export](https://support.1password.com/export/)、[Proton Pass CSV export](https://proton.me/support/pass-export)、[Chrome CSV](https://support.google.com/chrome/answer/13068232)。各サービスの実ファイルの全列は仕様として確定していない。
+CSVの解析・変換には仕様書に専用テストIDがない。現時点のテスト名では入力の形を扱う I-02 を関連IDとして付けたが、仕様書の I-02 は API の不正JSON等を指す。フェーズ3でCSV専用IDを決める。
+
+CSV列の確認に使った公開資料：[1Password CSV export](https://support.1password.com/export/)、[Proton Pass CSV export](https://proton.me/support/pass-export)、[Chrome CSV](https://support.google.com/chrome/answer/13068232)。各サービスの実ファイルの全列は仕様として確定していない。
 
 ## フェーズ3で実機・統合確認する E 系
 
@@ -38,4 +40,5 @@ CSVの解析・変換には仕様書に専用テストIDがない。現時点の
 | E-14〜18 | — | Service Worker停止、パスコード5回失敗、storage.session権限、管理操作、再起動 |
 
 プレビュー・確認画面では CSV 由来の値をテキストとして扱い、HTMLとして解釈しないこと。元CSVを削除する案内と、一括暗号化送信はフェーズ3で実装する。
+
 
