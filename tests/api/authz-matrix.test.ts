@@ -130,9 +130,10 @@ test('Z（表） 公開の入口：ログイン・更新・TOTP の一時トー�
   assert.equal((await t.request('POST', '/v1/auth/totp', undefined, { challenge_token: 'A'.repeat(43), code: '000000', extra: 1 })).status, 400);
 });
 
+// 1マスを1つのテストにする（結果の一覧で、マスごとに成功・失敗が分かる）
 for (const row of ROWS) {
-  test(`Z（表） ${row.name}：${STATES.map((s) => `${s}=${row.expect[s]}`).join('、')}`, async () => {
-    for (const state of STATES) {
+  for (const state of STATES) {
+    test(`Z（表） ${row.name} × ${state} → ${row.expect[state]}`, async () => {
       // マスごとに作り直す（前のマスの操作の影響を受けない）
       const t = setup();
       const owner = await t.addMember('active');
@@ -164,6 +165,6 @@ for (const row of ROWS) {
       const expected = row.expect[state];
       if (expected === 'ok') assert.ok(res.status !== 401 && res.status !== 403, `${state}：許可のはずが ${res.status}`);
       else assert.equal(res.status, expected, `${state}`);
-    }
-  });
+    });
+  }
 }

@@ -3,7 +3,7 @@
 - 日付：2026-10-17
 - ブランチ：feat/discord-login
 - 計画：docs/実装状況.md の8章。判断待ちの8件は案どおりに決定し、仕様書に反映した（docs/判断待ち.md の決定済み）
-- テスト：`npm test` 182件すべて成功、`npm run typecheck` 成功
+- テスト：`npm test` 273件すべて成功（認可の表は1マス1テストで104件）、`npm run typecheck` 成功
 
 ## 変更したファイル
 
