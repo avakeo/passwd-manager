@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { utf8 } from '../../src/crypto/bytes.ts';
+import { fromHex, toBase64Url, toHex, utf8 } from '../../src/crypto/bytes.ts';
 import { createMemberKey, unlockMemberKey } from '../../src/crypto/member-key.ts';
 import { createGrant, grantInfo, openGrant, openGrantForAdmin, type Grant, type OwnKey } from '../../src/crypto/grant.ts';
 import { decryptItem, encryptItem } from '../../src/crypto/item.ts';
 import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.ts';
-import { ALG_HPKE_BASE, FORMAT_V1 } from '../../src/crypto/format.ts';
+import { ALG_HPKE_BASE, FORMAT_V1, encodeGrantEnvelope } from '../../src/crypto/format.ts';
+import { AEAD_AES_256_GCM, setupBaseSWithEphemeral } from '../../src/crypto/hpke-core.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
 
@@ -154,4 +155,62 @@ test('既知の弱点（範囲外）：乗っ取られたサーバーは既存�
   const item = { type: 'login' as const, title: '経理', username: 'c@example.com', password: 'Zq8!mW3#rT6p' };
   const ciphertext = await encryptItem(cVaultKey, ctx, item);
   assert.deepEqual(await decryptItem(await importVaultKey(evilVaultKeyRaw), ctx, ciphertext), item);
+});
+
+// Codex レビュー #5：既知解テスト。固定の入力（受け手と使い捨ての鍵ペア、世代、鍵ID、Vault 鍵）から作るグラントが、決まった値になる。
+// 期待値は src を使わず、node:crypto で RFC 9180 の SealBase を別に組んで計算した。
+// C-13 は往復のテストなので、info のラベルなどを送り手と受け手の両方で同じように間違えると捕まえられない（step-5.md の M2）。
+// このテストは、info を含めて仕様どおりの値になっているかを確かめる。
+const kat = {
+  skR: '902e2bae2815c7e1d5ef6a62e6f0897b46ab72459803d3f7870e99bd603d4e1f',
+  pkR: '0419f4143f62326f7c03bc9f89316030b4d20be5118a4a1639966b4f51add21fd2e7583be2fe7b5d03a87173c108b7ad053745cf071fccf77be21be411b74d7b5b',
+  skE: '400d69b5a703a01a37d111df3a8f41e0375d9a86a399bb643f50bcc27d17c15c',
+  pkE: '042f78978cc2ca7b22d5cf175993585412e687a3c19478e65b0f6685c37baabda3d76faac87e8278570fb6c8132d8b9db27137931eddbba461b34c41215e86b284',
+  vaultKeyVersion: 1,
+  recipientKeyId: 'key_kat_recipient',
+  vaultKey: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+  enc: '042f78978cc2ca7b22d5cf175993585412e687a3c19478e65b0f6685c37baabda3d76faac87e8278570fb6c8132d8b9db27137931eddbba461b34c41215e86b284',
+  wrappedKey: '0102e35dbd6a4bad3759133f2bfa50b2294a1848338bccb8d87d505d9bea866189250f75d29bc429b42f22d65ab1643c0d2a',
+};
+
+// 秘密鍵は d と公開鍵の x、y を JWK にして読み込む（点の計算はしない）。enc を書き出すので、公開鍵は取り出し可にする。
+async function importKatPair(skHex: string, pkHex: string): Promise<CryptoKeyPair> {
+  const pk = fromHex(pkHex);
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    { kty: 'EC', crv: 'P-256', d: toBase64Url(fromHex(skHex)), x: toBase64Url(pk.slice(1, 33)), y: toBase64Url(pk.slice(33, 65)) },
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits'],
+  );
+  const publicKey = await crypto.subtle.importKey('raw', pk, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+  return { privateKey, publicKey };
+}
+
+test('既知解 固定の入力から作ったグラントが、決まった enc と wrapped_key になる', async () => {
+  const info = grantInfo(kat.vaultKeyVersion, kat.recipientKeyId);
+  assert.equal(new TextDecoder().decode(info), 'teampw/v1/vault-key-grant|1|key_kat_recipient');
+  const { enc, context } = await setupBaseSWithEphemeral(AEAD_AES_256_GCM, fromHex(kat.pkR), info, await importKatPair(kat.skE, kat.pkE));
+  const wrappedKey = encodeGrantEnvelope(await context.seal(new Uint8Array(0), fromHex(kat.vaultKey)));
+  assert.equal(toHex(enc), kat.enc);
+  assert.equal(toHex(wrappedKey), kat.wrappedKey);
+});
+
+test('既知解 決まったグラントを、固定の受け手の秘密鍵で開くと、決まった Vault 鍵になる', async () => {
+  const own: OwnKey = {
+    keyId: kat.recipientKeyId,
+    publicKey: fromHex(kat.pkR),
+    privateKey: (await importKatPair(kat.skR, kat.pkR)).privateKey,
+  };
+  const grant: Grant = {
+    vaultKeyVersion: kat.vaultKeyVersion,
+    recipientKeyId: kat.recipientKeyId,
+    ephemeralPublicKey: fromHex(kat.enc),
+    wrappedKey: fromHex(kat.wrappedKey),
+  };
+  assert.equal(toHex(await openGrantForAdmin(own, grant)), kat.vaultKey);
+  const vaultKey = await openGrant(own, grant);
+  const ctx = { itemId: 'item_kat', vaultKeyVersion: 1 };
+  const env = await encryptItem(await importVaultKey(fromHex(kat.vaultKey)), ctx, { type: 'note', title: 't', body: 'b' });
+  assert.deepEqual(await decryptItem(vaultKey, ctx, env), { type: 'note', title: 't', body: 'b' });
 });
