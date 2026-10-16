@@ -258,3 +258,65 @@ test('Z-04 他のメンバー宛てのグラントは取得できない（GET /v
   assert.equal(vault.grant.recipient_key_id, 'key_a');
   assert.equal(vault.grant.wrapped_key, 'wrapped_for_key_a');
 });
+
+// DeepSeek #5・#10：GET /v1/me が返すのは必要な分だけ。読み取り専用の Web 用トークンには、暗号化した秘密鍵を返さない
+// （Web ページに XSS があっても、拡張機能の暗号材料を持ち出させない）。
+test('Z-08 GET /v1/me は必要な分だけを返し、Web 用トークンには暗号化した秘密鍵（ECDH と署名の両方）を返さない（DeepSeek #5・#10）', async () => {
+  const t = setup();
+  const admin = await t.addMember('active', { role: 'admin' });
+  const adminWeb = await t.addMember('active', { role: 'admin', scope: 'web' });
+  t.db.db.prepare(`UPDATE sessions SET member_id = ? WHERE id = 'session_2'`).run(admin.id);
+  const c = await t.addMember('active');
+  const cWeb = await t.addMember('active', { scope: 'web' });
+  t.db.db.prepare(`UPDATE sessions SET member_id = ? WHERE id = 'session_4'`).run(c.id);
+  insertKey(t, admin.id, adminKey.record);
+  insertKey(t, c.id, cKey.record);
+  const me = async (token: string) => (await (await t.request('GET', '/v1/me', token)).json()) as Record<string, unknown> & { key: Record<string, unknown> };
+
+  // 拡張機能のメンバー：自分の鍵を開くのに要るものと、照合用の管理者の組。署名鍵の列は持たない
+  const cExt = await me(c.token);
+  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(cExt.key).sort(), ['encrypted_private_key', 'format_version', 'id', 'kdf_algorithm', 'kdf_params', 'kdf_salt', 'ecdh_public_key'].sort());
+
+  // 拡張機能の管理者：署名鍵も開く。照合用の管理者の組は要らない（自分の行を使う）
+  const adminExt = await me(admin.token);
+  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'role']);
+  assert.ok('encrypted_sign_private_key' in adminExt.key && 'ecdsa_public_key' in adminExt.key);
+
+  // Web 用：暗号化した秘密鍵も、ロック解除に使う KDF の設定も返さない
+  for (const [name, token] of [['メンバー', cWeb.token], ['管理者', adminWeb.token]] as const) {
+    const body = await me(token);
+    assert.deepEqual(Object.keys(body.key).sort(), name === '管理者' ? ['ecdh_public_key', 'ecdsa_public_key', 'id'] : ['ecdh_public_key', 'id'], name);
+    const dump = JSON.stringify(body);
+    for (const secret of [toBase64Url(cKey.record.encryptedPrivateKey), toBase64Url(adminKey.record.encryptedPrivateKey), toBase64Url(adminKey.record.encryptedSignPrivateKey)]) {
+      assert.ok(!dump.includes(secret), `${name}：暗号化した秘密鍵が含まれている`);
+    }
+  }
+});
+
+// DeepSeek #5：管理者の署名鍵の行を ORDER BY なしの1件目で選んでいたので、行が複数あると別の鍵を返しえた。
+test('P-10 有効な管理者の署名鍵がちょうど1つでなければ、GET /v1/me は管理者の組を返さずにエラーにする（DeepSeek #5）', async () => {
+  const t = setup();
+  const c = await t.addMember('active');
+  insertKey(t, c.id, cKey.record);
+  // 0個（管理者の鍵がまだない）
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 409);
+
+  // 1個なら返す
+  const admin = await t.addMember('active', { role: 'admin' });
+  insertKey(t, admin.id, adminKey.record);
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 200);
+
+  // 削除済みの管理者の鍵は数えない
+  const removedAdmin = await t.addMember('removed', { role: 'admin' });
+  insertKey(t, removedAdmin.id, { ...attackerKey.record, keyId: 'key_removed_admin' });
+  assert.equal((await t.request('GET', '/v1/me', c.token)).status, 200);
+
+  // 2個（サーバーが別の管理者の行を足した）
+  const second = await t.addMember('active', { role: 'admin' });
+  insertKey(t, second.id, attackerKey.record);
+  const res = await t.request('GET', '/v1/me', c.token);
+  assert.equal(res.status, 409);
+  const body = JSON.stringify(await res.json());
+  assert.ok(!body.includes(toBase64Url(attackerKey.record.signPublicKey)) && !body.includes(toBase64Url(adminKey.record.signPublicKey)));
+});
