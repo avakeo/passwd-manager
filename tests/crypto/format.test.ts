@@ -46,9 +46,11 @@ test('ID に区切り文字などが入ると拒否する', () => {
   assertId('key_7f3a');
 });
 
-test('AAD は v1|item|ID|世代 と v1|member-key|鍵ID', () => {
+test('AAD は v1|item|ID|世代 と v1|member-key|鍵ID|公開鍵の SHA-256', () => {
   assert.deepEqual(itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1 }), utf8('v1|item|item_3c9a|1'));
-  assert.deepEqual(memberKeyAad({ keyId: 'key_7f3a' }), utf8('v1|member-key|key_7f3a'));
+  const publicKeySha256 = fromHex('70dd2685e8369120b12da8c33d6fbde7a0d9215389fe4f47efd151147a4b8110');
+  assert.deepEqual(memberKeyAad({ keyId: 'key_7f3a', publicKeySha256 }), utf8('v1|member-key|key_7f3a|70dd2685e8369120b12da8c33d6fbde7a0d9215389fe4f47efd151147a4b8110'));
+  assert.throws(() => memberKeyAad({ keyId: 'key_7f3a', publicKeySha256: publicKeySha256.subarray(1) }), isCode('INVALID_INPUT'));
   assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 0 }), isCode('INVALID_INPUT'));
   assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1.5 }), isCode('INVALID_INPUT'));
 });

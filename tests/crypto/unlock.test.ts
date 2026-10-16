@@ -21,12 +21,13 @@ async function ecdh(privateKey: CryptoKey, publicKey: CryptoKey) {
 }
 
 // 学習メモ「楕円曲線暗号ノート」10章の値。A-1 の手順で、メモの秘密鍵をメモのノンスと AAD で暗号化したもの。
+// AAD は v1|member-key|key_7f3a|<公開鍵の SHA-256>（2026-10-17 に公開鍵の SHA-256 を足したので、認証タグだけが変わった）。
 const memo = {
   salt: '9f2c4a71e03b5d88c16a2f0b7e4d9153',
   nonce: '3b7e19c04a52d6f8e1a09c27',
   keyId: 'key_7f3a',
   ciphertext:
-    '9fb32638cfb3703207827df311bbf2428b256d0529ac87ae069cd81b2ba12d1a45f9e8c4c4138b23f4efdaa118d0b77975ff631ec2f53844c87c5006be41e318a972bd2a7b22c0c6dbde1748c36dfd4a3a54dd68075e022d17b0386bb18264e0f93abafae1c10586cb3af1a5c3e932e50868ae10dad4bebb54cd54d4c1a8537ad0403e483828a2dff72a5eb5d8580c35152dbbe0c7f2c53546f0',
+    '9fb32638cfb3703207827df311bbf2428b256d0529ac87ae069cd81b2ba12d1a45f9e8c4c4138b23f4efdaa118d0b77975ff631ec2f53844c87c5006be41e318a972bd2a7b22c0c6dbde1748c36dfd4a3a54dd68075e022d17b0386bb18264e0f93abafae1c10586cb3af1a5c3e932e50868ae10dad4bebb54cd54d4c1a8537ad0403e483828a2dff72a98129e17ad251a8e801940d2480c04f9',
   d: 62959851324257542584805810004659076169591458047909207254651228379856561577241n,
   x: 46749387051993978084910577706322439418722029122079100901817284889689444358162n,
   y: 15385064884553841494372430373701728411482615718101619707862451283578032743044n,
@@ -97,6 +98,15 @@ test('秘密鍵の暗号文を別の鍵IDの行に移すと失敗する（AAD �
   const record = memoRecord();
   record.keyId = 'key_0001';
   await assert.rejects(unlockMemberKey(PASSWORD, record), isDecryptFailed);
+});
+
+// 攻撃者レビュー #3：サーバーが /v1/me の公開鍵だけを別の点に差し替える。
+// 秘密鍵の AAD に自分の公開鍵の SHA-256 が入っているので、差し替えられた公開鍵ではロック解除できない。
+test('秘密鍵と組でない公開鍵の行では、ロック解除に失敗する（AAD の公開鍵の SHA-256）', async () => {
+  const { record } = await createMemberKey(PASSWORD);
+  const other = await subtle.generateKey(ECDH_P256, true, ['deriveBits']);
+  const swapped = { ...record, publicKey: new Uint8Array(await subtle.exportKey('raw', other.publicKey)) };
+  await assert.rejects(unlockMemberKey(PASSWORD, swapped), isDecryptFailed);
 });
 
 test('C-14 サーバーが返した KDF 設定が弱ければ、復号を試さずに拒否する', async () => {
