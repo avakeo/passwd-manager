@@ -140,3 +140,11 @@ test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違
     isCode('PUBLIC_KEY_MISMATCH'),
   );
 });
+
+// 攻撃者レビュー #4：「照合なしで包む関数を export しない」を、ソースの文字列ではなく、読み込んだモジュールの中身で確かめる。
+// 別名を付けて export しても（export { sealGrant as createGrantInner } など）、ここで見つかる。
+test('P-01 grant.ts が export する関数は、照合してから包む createGrant と、開く側の関数だけ', async () => {
+  const grant = await import('../../src/crypto/grant.ts');
+  const functions = Object.entries(grant).filter(([, v]) => typeof v === 'function').map(([k]) => k).sort();
+  assert.deepEqual(functions, ['createGrant', 'grantInfo', 'openGrant', 'openGrantForAdmin']);
+});
