@@ -1,0 +1,21 @@
+# wrangler の設定の例。これを wrangler.toml にコピーして、手元の値を書く（wrangler.toml はコミットしない）。
+# 秘密の値（DISCORD_CLIENT_SECRET、DISCORD_BOT_TOKEN、TOTP_ENCRYPTION_KEY）はここに書かず、
+# `npx wrangler secret put <名前>` で登録する。手元の wrangler dev では .dev.vars に書く（どちらもコミットしない）。
+# 手順は docs/実装状況.md の 8.5。
+
+name = "teampw-api"
+main = "src/api/worker.ts"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "teampw-dev"
+database_id = "<npx wrangler d1 create teampw-dev が表示した database_id>"
+migrations_dir = "migrations"
+
+[vars]
+DISCORD_CLIENT_ID = "<Discord のアプリの Client ID>"
+DISCORD_GUILD_ID = "<チームのサーバー ID>"
+DISCORD_ROLE_ID = "<ログインを許すロールの ID>"
+# 受け付ける redirect_uri をカンマで区切る。手動確認が終われば localhost は消す
+DISCORD_REDIRECT_URIS = "https://<拡張機能の ID>.chromiumapp.org/,http://localhost:8788/callback"
