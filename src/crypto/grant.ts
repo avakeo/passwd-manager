@@ -156,7 +156,8 @@ export type OwnKey = {
 export type { GrantTrust };
 
 // 開く前に、設計案 4.3 の順で確かめる。1つでも違えば開かない。
-async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<void> {
+// currentVaultKeyVersion は、サーバーが /v1/vault で「今の世代」として返した値。
+async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<void> {
   // 1. 管理者の署名用公開鍵を固定し、最後に見た世代も初期化してある（未設定なら、固定していないのと同じ扱い）
   const { signer, lastSeen } = await pinnedSignerAndGeneration(trust);
   // 2. 署名者の鍵ID が、固定した鍵ID と一致する
@@ -166,6 +167,9 @@ async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promis
   // 4. 最後に見た世代より古くない（C-20）
   assertVersion(grant.vaultKeyVersion);
   if (grant.vaultKeyVersion < lastSeen) throw new CryptoError('STALE_GENERATION');
+  // サーバーが示す今の世代と食い違うグラントは開かない（DeepSeek #2）。古い本物のグラントを今のものと思わせない
+  assertVersion(currentVaultKeyVersion);
+  if (grant.vaultKeyVersion !== currentVaultKeyVersion) throw new CryptoError('GENERATION_MISMATCH');
   // 5. 宛先の鍵ID が自分の鍵ID と一致する
   if (grant.recipientKeyId !== own.keyId) throw decryptFailed();
   // 6. 署名する中身は、グラントの行の値ではなく、固定した署名者と自分の値から組み立てる
@@ -184,8 +188,8 @@ async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promis
   if (!(await verifySignature(publicKey, signature, message))) throw new CryptoError('SIGNATURE_INVALID');
 }
 
-async function openGrantRaw(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<Bytes> {
-  await verifyGrant(own, trust, grant);
+async function openGrantRaw(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<Bytes> {
+  await verifyGrant(own, trust, grant, currentVaultKeyVersion);
   const ct = parseGrantEnvelope(grant.wrappedKey);
   // info は、グラントの行に書かれた値ではなく、自分の鍵IDと期待する世代から作る
   const info = grantInfo(grant.vaultKeyVersion, own.keyId);
@@ -201,8 +205,8 @@ async function openGrantRaw(own: OwnKey, trust: GrantTrust, grant: Grant): Promi
 }
 
 // 通常の利用：自分宛てのグラントの署名を確かめて開き、Vault 鍵を取り出し不可で読み込む。
-export async function openGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<CryptoKey> {
-  const raw = await openGrantRaw(own, trust, grant);
+export async function openGrant(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<CryptoKey> {
+  const raw = await openGrantRaw(own, trust, grant, currentVaultKeyVersion);
   try {
     return await importVaultKey(raw);
   } finally {
@@ -213,6 +217,6 @@ export async function openGrant(own: OwnKey, trust: GrantTrust, grant: Grant): P
 // 管理操作（承認、ローテーション）だけ：署名を確かめたうえで、グラントを取り出し可として開き直し、生の Vault 鍵を返す。
 // 管理者自身宛てのグラントも、ここで署名を確かめる（C-23）。
 // 呼び出し側は、全員分を包み終えたらすぐに wipe する（仕様書「鍵のライフサイクル」の Vault 鍵（管理操作））。
-export function openGrantForAdmin(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<Bytes> {
-  return openGrantRaw(own, trust, grant);
+export function openGrantForAdmin(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<Bytes> {
+  return openGrantRaw(own, trust, grant, currentVaultKeyVersion);
 }

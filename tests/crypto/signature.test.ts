@@ -22,7 +22,7 @@ import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.
 import { ALG_ECDSA_P256_SHA256, FORMAT_V1 } from '../../src/crypto/format.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
-import { newTrust } from '../helpers/trust.ts';
+import { newTrust, served } from '../helpers/trust.ts';
 import { pinSigner as pinSignerForAdmin } from '../../src/crypto/signer.ts';
 import {
   assertSignerPinned,
@@ -94,7 +94,7 @@ test('署名付きのグラントを、管理者の署名鍵を固定した C �
   assert.equal(grant.signature[0], FORMAT_V1);
   assert.equal(grant.signature[1], ALG_ECDSA_P256_SHA256);
   const trust = await trusted();
-  const vaultKey = await openGrant(cOwn(), trust, grant);
+  const vaultKey = await openGrant(cOwn(), trust, ...served(grant));
   const ctx = { itemId: 'item_sig', vaultKeyVersion: 1 };
   const env = await encryptItem(await importVaultKey(raw), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(vaultKey, ctx, env), { type: 'note', title: 't', body: 'b' });
@@ -112,7 +112,7 @@ test('C-17 署名のないグラント（空、長さ違い、形式やアルゴ
     ['アルゴリズムIDが AES-GCM（0x01）', concat(new Uint8Array([FORMAT_V1, 0x01]), grant.signature.slice(2))],
   ];
   for (const [name, signature] of variants) {
-    await assert.rejects(openGrant(cOwn(), await trusted(), { ...grant, signature }), isCode('SIGNATURE_INVALID'), name);
+    await assert.rejects(openGrant(cOwn(), await trusted(), ...served({ ...grant, signature })), isCode('SIGNATURE_INVALID'), name);
   }
 });
 
@@ -134,7 +134,7 @@ test('C-18 固定した管理者の鍵とは別の鍵で署名した偽グラン
   let vaultKey: CryptoKey | undefined;
   await assert.rejects(
     (async () => {
-      vaultKey = await openGrant(cOwn(), trust, evilGrant);
+      vaultKey = await openGrant(cOwn(), trust, ...served(evilGrant));
     })(),
     isCode('SIGNATURE_INVALID'),
   );
@@ -142,10 +142,10 @@ test('C-18 固定した管理者の鍵とは別の鍵で署名した偽グラン
   assert.equal(await trust.generations.get(), 1, '偽のグラントで世代の記録は進まない');
 
   // 署名を外して、署名のない（提出版の）形で差し替えても通らない
-  await assert.rejects(openGrant(cOwn(), trust, { ...evilGrant, signature: new Uint8Array(0) }), isCode('SIGNATURE_INVALID'));
+  await assert.rejects(openGrant(cOwn(), trust, ...served({ ...evilGrant, signature: new Uint8Array(0) })), isCode('SIGNATURE_INVALID'));
   // 本物のグラントの署名を偽グラントに付け替えても通らない（署名の対象に enc と wrapped_key が入っている）
   const real = await grantToC(adminSigner, 1);
-  await assert.rejects(openGrant(cOwn(), trust, { ...evilGrant, signature: real.signature }), isCode('SIGNATURE_INVALID'));
+  await assert.rejects(openGrant(cOwn(), trust, ...served({ ...evilGrant, signature: real.signature })), isCode('SIGNATURE_INVALID'));
 });
 
 test('C-19 署名の対象のフィールドを1つずつ書き換えたグラントは、どれも開かずに拒否される', async () => {
@@ -168,10 +168,10 @@ test('C-19 署名の対象のフィールドを1つずつ書き換えたグラ�
     ['署名そのもの', { ...grant, signature: flip(grant.signature, 30) }, cOwn(), 'SIGNATURE_INVALID'],
   ];
   for (const [name, g, own, code] of cases) {
-    await assert.rejects(openGrant(own, await trusted(), g), isCode(code), name);
+    await assert.rejects(openGrant(own, await trusted(), ...served(g)), isCode(code), name);
   }
   // 書き換えなければ開ける
-  await openGrant(cOwn(), await trusted(), grant);
+  await openGrant(cOwn(), await trusted(), ...served(grant));
 });
 
 // 攻撃者レビュー #7 の再現：サーバーが「現在の世代」を古い値にし、古い世代の（本物の署名が付いた）グラントを返す。
@@ -179,13 +179,13 @@ test('C-20 最後に見た世代より古い世代の、正しく署名された
   const oldGrant = await grantToC(adminSigner, 1);
   const newGrant = await grantToC(adminSigner, 2);
   const trust = await trusted();
-  await openGrant(cOwn(), trust, oldGrant);
-  await openGrant(cOwn(), trust, newGrant);
+  await openGrant(cOwn(), trust, ...served(oldGrant));
+  await openGrant(cOwn(), trust, ...served(newGrant));
   assert.equal(await trust.generations.get(), 2);
-  await assert.rejects(openGrant(cOwn(), trust, oldGrant), isCode('STALE_GENERATION'));
-  await assert.rejects(openGrantForAdmin(cOwn(), trust, oldGrant), isCode('STALE_GENERATION'));
+  await assert.rejects(openGrant(cOwn(), trust, ...served(oldGrant)), isCode('STALE_GENERATION'));
+  await assert.rejects(openGrantForAdmin(cOwn(), trust, ...served(oldGrant)), isCode('STALE_GENERATION'));
   // 同じ世代はもう一度開ける（Service Worker の再起動など）
-  await openGrant(cOwn(), trust, newGrant);
+  await openGrant(cOwn(), trust, ...served(newGrant));
   assert.equal(await trust.generations.get(), 2);
 });
 
@@ -199,7 +199,7 @@ test('C-21 管理者の署名用公開鍵だけを差し替えた行では、署
   // 差し替えなければ開け、開いた署名鍵の署名は行の公開鍵で通る
   const unlocked = await unlockAdminKey(ADMIN_PASSWORD, admin.record);
   const grant = await grantToC({ ...adminSigner, privateKey: unlocked.signPrivateKey }, 1);
-  await openGrant(cOwn(), await trusted(), grant);
+  await openGrant(cOwn(), await trusted(), ...served(grant));
 });
 
 test('C-16 ロック解除後の署名用秘密鍵は書き出せない（取り出し不可、用途は署名だけ）', async () => {
@@ -259,8 +259,8 @@ test('C-23 管理者自身宛てのグラントを別の鍵で署名したもの
   const trust = newTrust(ADMIN_ID);
   await pinSigner(trust, adminPin, 1);
   const adminOwnUnlocked = { ...adminOwn(), privateKey: unlocked.privateKey };
-  await assert.rejects(openGrantForAdmin(adminOwnUnlocked, trust, evil), isCode('SIGNATURE_INVALID'));
-  await assert.rejects(openGrant(adminOwnUnlocked, trust, evil), isCode('SIGNATURE_INVALID'));
+  await assert.rejects(openGrantForAdmin(adminOwnUnlocked, trust, ...served(evil)), isCode('SIGNATURE_INVALID'));
+  await assert.rejects(openGrant(adminOwnUnlocked, trust, ...served(evil)), isCode('SIGNATURE_INVALID'));
 
   // 本物の自分宛てのグラントは開け、管理操作で C さん宛てに包み直せる
   const raw = generateVaultKeyRaw();
@@ -272,21 +272,21 @@ test('C-23 管理者自身宛てのグラントを別の鍵で署名したもの
     vaultKeyVersion: 1,
     vaultKeyRaw: raw.slice(),
   });
-  const reopened = await openGrantForAdmin(adminOwnUnlocked, trust, real);
+  const reopened = await openGrantForAdmin(adminOwnUnlocked, trust, ...served(real));
   assert.deepEqual(reopened, raw);
   const toC = await grantToC({ ...adminSigner, privateKey: unlocked.signPrivateKey }, 1, reopened);
   reopened.fill(0);
-  await openGrant(cOwn(), await trusted(), toC);
+  await openGrant(cOwn(), await trusted(), ...served(toC));
 });
 
 test('P-04 管理者の署名用公開鍵を固定する前は、本物のグラントでも開かず、照合を求める', async () => {
   const grant = await grantToC(adminSigner, 1);
   const trust = newTrust(C_ID);
-  await assert.rejects(openGrant(cOwn(), trust, grant), isCode('SIGNER_NOT_PINNED'));
-  await assert.rejects(openGrantForAdmin(cOwn(), trust, grant), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(openGrant(cOwn(), trust, ...served(grant)), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(openGrantForAdmin(cOwn(), trust, ...served(grant)), isCode('SIGNER_NOT_PINNED'));
   // 照合して固定すれば開ける
   await pinSigner(trust, adminPin, 1);
-  await openGrant(cOwn(), trust, grant);
+  await openGrant(cOwn(), trust, ...served(grant));
 });
 
 test('P-05 固定した後に、サーバーが管理者の署名用公開鍵か鍵ID を差し替えると検知し、グラントを開かない', async () => {
@@ -305,7 +305,7 @@ test('P-05 固定した後に、サーバーが管理者の署名用公開鍵か
   const attackerTrust = newTrust('member_attacker');
   await pinSigner(attackerTrust, { memberId: ADMIN_ID, keyId: attacker.record.keyId, publicKey: attacker.record.signPublicKey }, 1);
   const evil = await grantToC({ ...attackerSigner, keyId: attacker.record.keyId, trust: attackerTrust }, 1);
-  await assert.rejects(openGrant(cOwn(), trust, evil), isCode('SIGNER_MISMATCH'));
+  await assert.rejects(openGrant(cOwn(), trust, ...served(evil)), isCode('SIGNER_MISMATCH'));
   // 固定した後で呼び出し側の配列を書き換えても、固定値は変わらない
   const pin = { ...adminPin, publicKey: adminPin.publicKey.slice() };
   const store = newTrust(C_ID);
@@ -379,4 +379,17 @@ test('既知解 グラントの署名は、src を使わずに node:crypto で�
   const verifier = createVerify('SHA256');
   verifier.update(message);
   assert.equal(verifier.verify({ key, dsaEncoding: 'ieee-p1363' }, grant.signature.slice(2)), true);
+});
+
+// DeepSeek #2：サーバーは /v1/vault で「今の世代は7」と答えつつ、グラントの行には古い世代5の本物のグラントを入れる。
+// 利用者は最新を使っていると思い込み、新しいアイテムを古い鍵で暗号化してしまう。
+test('C-24 サーバーが返す今の世代とグラントの世代が食い違うと、本物のグラントでも開かずに止める（DeepSeek #2）', async () => {
+  const grant = await grantToC(adminSigner, 5);
+  for (const current of [7, 4, 6]) {
+    await assert.rejects(openGrant(cOwn(), await trusted(), grant, current), isCode('GENERATION_MISMATCH'), `今の世代 ${current}`);
+    await assert.rejects(openGrantForAdmin(cOwn(), await trusted(), grant, current), isCode('GENERATION_MISMATCH'), `今の世代 ${current}`);
+  }
+  const trust = await trusted();
+  await openGrant(cOwn(), trust, grant, 5);
+  assert.equal(await trust.generations.get(), 5);
 });

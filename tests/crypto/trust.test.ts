@@ -9,6 +9,7 @@ import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
 import { MemoryTrustStorage, openTrust, pinSigner } from '../../src/crypto/signer.ts';
+import { served } from '../helpers/trust.ts';
 
 const API = 'https://pw-api.example.com';
 
@@ -49,18 +50,18 @@ test('P-09 固定と最後に見た世代は、API の接続先とメンバー I
   const storage = new MemoryTrustStorage();
   const trustA = openTrust(storage, { apiOrigin: API, memberId: 'member_a' });
   await pinSigner(trustA, adminPin, 1);
-  await openGrant(own(memberA, 'member_a'), trustA, await grantTo(memberA, 'member_a', 5));
+  await openGrant(own(memberA, 'member_a'), trustA, ...served(await grantTo(memberA, 'member_a', 5)));
   assert.equal(await trustA.generations.get(), 5);
 
   // B さんの組には、A さんの固定も世代も効かない
   const trustB = openTrust(storage, { apiOrigin: API, memberId: 'member_b' });
   assert.equal(await trustB.signerPins.get(), undefined);
   assert.equal(await trustB.generations.get(), undefined);
-  await assert.rejects(openGrant(own(memberB, 'member_b'), trustB, await grantTo(memberB, 'member_b', 5)), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(openGrant(own(memberB, 'member_b'), trustB, ...served(await grantTo(memberB, 'member_b', 5))), isCode('SIGNER_NOT_PINNED'));
 
   // B さんが自分で照合して固定すれば、A さんの世代（5）に引きずられずに世代3を開ける
   await pinSigner(trustB, adminPin, 1);
-  await openGrant(own(memberB, 'member_b'), trustB, await grantTo(memberB, 'member_b', 3));
+  await openGrant(own(memberB, 'member_b'), trustB, ...served(await grantTo(memberB, 'member_b', 3)));
   assert.equal(await trustB.generations.get(), 3);
   assert.equal(await trustA.generations.get(), 5);
 
@@ -103,7 +104,7 @@ test('C-20 最後に見た世代の更新は保存先の1つの操作で、同�
     const trust = openTrust(new SlowStorage(), { apiOrigin: API, memberId: 'member_a' });
     await pinSigner(trust, adminPin, 1);
     const grants = await Promise.all(versions.map((v) => grantTo(memberA, 'member_a', v)));
-    await Promise.all(grants.map((g) => openGrant(own(memberA, 'member_a'), trust, g)));
+    await Promise.all(grants.map((g) => openGrant(own(memberA, 'member_a'), trust, ...served(g))));
     assert.equal(await trust.generations.get(), Math.max(...versions), `同時に開いた世代 ${versions.join('、')}`);
   }
 });
@@ -124,7 +125,7 @@ test('P-07 最後に見た世代が未設定の端末は、署名鍵を固定し
   // 署名鍵の固定だけがあり、世代がない状態（保存先の一部が消えた場合など）
   await trust.signerPins.set(adminPin);
   const oldest = await grantTo(memberA, 'member_a', 1);
-  await assert.rejects(openGrant(own(memberA, 'member_a'), trust, oldest), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(openGrant(own(memberA, 'member_a'), trust, ...served(oldest)), isCode('SIGNER_NOT_PINNED'));
   assert.equal(await trust.generations.get(), undefined);
 });
 
@@ -133,8 +134,8 @@ test('P-07 承認の照合で、管理者の画面の「今の世代」で初期
   // 対面で、フィンガープリントと一緒に今の世代（5）を見比べ、固定と同時に初期化する
   await pinSigner(trust, adminPin, 5);
   assert.equal(await trust.generations.get(), 5);
-  await assert.rejects(openGrant(own(memberA, 'member_a'), trust, await grantTo(memberA, 'member_a', 1)), isCode('STALE_GENERATION'));
-  await openGrant(own(memberA, 'member_a'), trust, await grantTo(memberA, 'member_a', 5));
+  await assert.rejects(openGrant(own(memberA, 'member_a'), trust, ...served(await grantTo(memberA, 'member_a', 1))), isCode('STALE_GENERATION'));
+  await openGrant(own(memberA, 'member_a'), trust, ...served(await grantTo(memberA, 'member_a', 5)));
 });
 
 // DeepSeek #7：管理者の端末の世代の記録が空のときに、サーバーが管理者自身宛ての本物の古いグラントを「現在」として返す。
@@ -146,7 +147,7 @@ test('P-08 管理者の端末を初期化した後は、世代を対面で初期
   // 初期化した管理者の端末：ロック解除できた自分の行から署名鍵は固定できるが、世代はまだない
   const fresh = openTrust(new MemoryTrustStorage(), { apiOrigin: API, memberId: 'member_admin' });
   await fresh.signerPins.set(adminPin);
-  await assert.rejects(openGrantForAdmin(adminOwn, fresh, oldSelf), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(openGrantForAdmin(adminOwn, fresh, ...served(oldSelf)), isCode('SIGNER_NOT_PINNED'));
   // 承認もローテーションもできない（グラントを作らない）
   const freshSigner: GrantSigner = { ...signer, trust: fresh };
   await assert.rejects(
@@ -156,7 +157,7 @@ test('P-08 管理者の端末を初期化した後は、世代を対面で初期
 
   // メンバーの端末に出ている世代（2）と対面で見比べて初期化すると、古い自分宛てのグラントは拒否し、今の世代なら作れる
   await pinSigner(fresh, adminPin, 2);
-  await assert.rejects(openGrantForAdmin(adminOwn, fresh, oldSelf), isCode('STALE_GENERATION'));
+  await assert.rejects(openGrantForAdmin(adminOwn, fresh, ...served(oldSelf)), isCode('STALE_GENERATION'));
   await assert.rejects(
     createGrant({ pins, signer: freshSigner, memberId: 'member_a', recipient: { keyId: memberA.record.keyId, publicKey: memberA.record.publicKey }, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() }),
     isCode('STALE_GENERATION'),

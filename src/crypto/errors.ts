@@ -17,7 +17,8 @@ export type CryptoErrorCode =
   | 'SIGNER_NOT_PINNED'
   | 'SIGNER_MISMATCH'
   | 'SIGNATURE_INVALID'
-  | 'STALE_GENERATION';
+  | 'STALE_GENERATION'
+  | 'GENERATION_MISMATCH';
 
 const MESSAGES: Record<CryptoErrorCode, string> = {
   DECRYPT_FAILED: '復号に失敗しました',
@@ -33,6 +34,7 @@ const MESSAGES: Record<CryptoErrorCode, string> = {
   SIGNER_MISMATCH: '管理者の署名鍵が固定した値と一致しません。グラントを開かずに中止しました',
   SIGNATURE_INVALID: '管理者の署名を確かめられません。偽のグラントの可能性があるため、開かずに中止しました',
   STALE_GENERATION: '前に見たものより古い Vault 鍵の世代が返されました。開かずに中止しました',
+  GENERATION_MISMATCH: 'サーバーが示す今の世代と、グラントの世代が一致しません。開かずに中止しました',
 };
 
 export class CryptoError extends Error {

@@ -20,7 +20,7 @@ import { AEAD_AES_256_GCM, setupBaseSWithEphemeral } from '../../src/crypto/hpke
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
 import { pinSigner, signMessage } from '../../src/crypto/signer.ts';
-import { newTrust } from '../helpers/trust.ts';
+import { newTrust, served } from '../helpers/trust.ts';
 
 const ADMIN_PASSWORD = 'admin-hoshi-sora-umi-42';
 const C_PASSWORD = 'c-san-kawa-mori-yama-18';
@@ -97,7 +97,7 @@ test('C-13 2人のメンバー間でグラントを作り、受け取った側�
 
   // C さん：別の端末でマスターパスワードから秘密鍵を開け、グラントを開いて、アイテムを復号する
   const cPrivate = await unlockMemberKey(C_PASSWORD, memberC.record);
-  const cVaultKey = await openGrant(ownKey(memberC, cPrivate), await trust(), grant);
+  const cVaultKey = await openGrant(ownKey(memberC, cPrivate), await trust(), ...served(grant));
   assert.deepEqual(await decryptItem(cVaultKey, ctx, ciphertext), item);
 });
 
@@ -105,18 +105,18 @@ test('C-06 他のメンバー宛てのグラントを自分の秘密鍵で開く
   const grant = await grantFor(memberC, 1, generateVaultKeyRaw());
   // B さんが、C さん宛てのグラントを自分宛てと偽って開こうとする
   const forged: Grant = { ...grant, recipientKeyId: memberB.record.keyId };
-  await assert.rejects(openGrant(ownKey(memberB), await trust(), forged), isSignatureOrDecryptFailed);
-  await assert.rejects(openGrant(ownKey(memberB), await trust(), grant), isDecryptFailed);
+  await assert.rejects(openGrant(ownKey(memberB), await trust(), ...served(forged)), isSignatureOrDecryptFailed);
+  await assert.rejects(openGrant(ownKey(memberB), await trust(), ...served(grant)), isDecryptFailed);
 });
 
 test('C-06 グラントを作った管理者自身も、そのグラントは開けない', async () => {
   const grant = await grantFor(memberC, 1, generateVaultKeyRaw());
-  await assert.rejects(openGrant(ownKey(admin), await trust(), { ...grant, recipientKeyId: admin.record.keyId }), isSignatureOrDecryptFailed);
+  await assert.rejects(openGrant(ownKey(admin), await trust(), ...served({ ...grant, recipientKeyId: admin.record.keyId })), isSignatureOrDecryptFailed);
 });
 
 test('グラントの世代を書き換えると開けない（署名と info に世代が入っている）', async () => {
   const grant = await grantFor(memberC, 1, generateVaultKeyRaw());
-  await assert.rejects(openGrant(ownKey(memberC), await trust(), { ...grant, vaultKeyVersion: 2 }), isSignatureOrDecryptFailed);
+  await assert.rejects(openGrant(ownKey(memberC), await trust(), ...served({ ...grant, vaultKeyVersion: 2 })), isSignatureOrDecryptFailed);
 });
 
 test('C-03 グラントの暗号文や使い捨ての公開鍵を改ざんすると開けない', async () => {
@@ -124,11 +124,11 @@ test('C-03 グラントの暗号文や使い捨ての公開鍵を改ざんする
   for (const i of [2, 20, grant.wrappedKey.length - 1]) {
     const wrappedKey = grant.wrappedKey.slice();
     wrappedKey[i]! ^= 1;
-    await assert.rejects(openGrant(ownKey(memberC), await trust(), { ...grant, wrappedKey }), isSignatureOrDecryptFailed, `wrappedKey[${i}]`);
+    await assert.rejects(openGrant(ownKey(memberC), await trust(), ...served({ ...grant, wrappedKey })), isSignatureOrDecryptFailed, `wrappedKey[${i}]`);
   }
   const enc = grant.ephemeralPublicKey.slice();
   enc[40]! ^= 1;
-  await assert.rejects(openGrant(ownKey(memberC), await trust(), { ...grant, ephemeralPublicKey: enc }), isSignatureOrDecryptFailed);
+  await assert.rejects(openGrant(ownKey(memberC), await trust(), ...served({ ...grant, ephemeralPublicKey: enc })), isSignatureOrDecryptFailed);
 });
 
 test('C-10 グラントの保存形式に AES-GCM のアルゴリズムID（0x01）が付いていたら拒否する', async () => {
@@ -138,7 +138,7 @@ test('C-10 グラントの保存形式に AES-GCM のアルゴリズムID（0x01
   // 管理者がその形のまま署名したとしても（署名の確認を通っても）、形式の確認で拒否する
   const signature = await resign({ ...grant, wrappedKey }, memberC);
   await assert.rejects(
-    openGrant(ownKey(memberC), await trust(), { ...grant, wrappedKey, signature }),
+    openGrant(ownKey(memberC), await trust(), ...served({ ...grant, wrappedKey, signature })),
     (e: unknown) => e instanceof CryptoError && e.code === 'UNSUPPORTED_FORMAT',
   );
 });
@@ -160,7 +160,7 @@ async function resign(grant: Grant, m: Member) {
 
 test('C-16 グラントを開いて得た Vault 鍵は書き出せない（取り出し不可）', async () => {
   const grant = await grantFor(memberC, 1, generateVaultKeyRaw());
-  const vaultKey = await openGrant(ownKey(memberC), await trust(), grant);
+  const vaultKey = await openGrant(ownKey(memberC), await trust(), ...served(grant));
   assert.equal(vaultKey.extractable, false);
   await assert.rejects(crypto.subtle.exportKey('raw', vaultKey));
   await assert.rejects(crypto.subtle.exportKey('jwk', vaultKey));
@@ -169,11 +169,11 @@ test('C-16 グラントを開いて得た Vault 鍵は書き出せない（取�
 test('管理操作では、グラントを開き直して生の Vault 鍵を得て、別のメンバー宛てに包み直せる', async () => {
   const raw = generateVaultKeyRaw();
   const toAdmin = await grantFor(admin, 1, raw.slice());
-  const reopened = await openGrantForAdmin(ownKey(admin), await trust(), toAdmin);
+  const reopened = await openGrantForAdmin(ownKey(admin), await trust(), ...served(toAdmin));
   assert.deepEqual(reopened, raw);
   const toC = await grantFor(memberC, 1, reopened);
   reopened.fill(0);
-  const cKey = await openGrant(ownKey(memberC), await trust(), toC);
+  const cKey = await openGrant(ownKey(memberC), await trust(), ...served(toC));
   const ctx = { itemId: 'item_x', vaultKeyVersion: 1 };
   const env = await encryptItem(await importVaultKey(raw), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(cKey, ctx, env), { type: 'note', title: 't', body: 'b' });
@@ -239,8 +239,8 @@ test('既知解 決まったグラントを、固定の受け手の秘密鍵で�
   };
   const katMember = { record: { ...memberC.record, keyId: kat.recipientKeyId, publicKey: fromHex(kat.pkR) }, privateKey: own.privateKey };
   const grant: Grant = { ...unsigned, signature: await resign(unsigned, katMember) };
-  assert.equal(toHex(await openGrantForAdmin(own, await trust(), grant)), kat.vaultKey);
-  const vaultKey = await openGrant(own, await trust(), grant);
+  assert.equal(toHex(await openGrantForAdmin(own, await trust(), ...served(grant))), kat.vaultKey);
+  const vaultKey = await openGrant(own, await trust(), ...served(grant));
   const ctx = { itemId: 'item_kat', vaultKeyVersion: 1 };
   const env = await encryptItem(await importVaultKey(fromHex(kat.vaultKey)), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(vaultKey, ctx, env), { type: 'note', title: 't', body: 'b' });

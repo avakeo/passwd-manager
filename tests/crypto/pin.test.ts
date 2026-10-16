@@ -5,7 +5,7 @@ import { MemoryPinStore, assertPinned, fingerprint, pinPublicKey } from '../../s
 import { createGrant, openGrant, type GrantSigner } from '../../src/crypto/grant.ts';
 import { createAdminKey, createMemberKey } from '../../src/crypto/member-key.ts';
 import { pinSigner } from '../../src/crypto/signer.ts';
-import { newTrust } from '../helpers/trust.ts';
+import { newTrust, served } from '../helpers/trust.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 
@@ -107,7 +107,7 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
   await openGrant(
     { memberId: 'member_c', keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey },
     trust,
-    ok,
+    ...served(ok),
   );
 });
 

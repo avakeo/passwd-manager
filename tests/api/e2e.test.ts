@@ -136,7 +136,7 @@ async function cOpensFromApi(t: Setup, token: string, cTrust: Parameters<typeof 
   });
   // サーバーが返す管理者の鍵が、固定と違っていれば止める（P-05）
   await assertSignerPinned(cTrust, signerFromApi(me.admin_signer!));
-  return openGrant({ memberId: me.id, keyId: me.key.id, publicKey, privateKey: cPrivate }, cTrust, grantFromApi(vault.grant));
+  return openGrant({ memberId: me.id, keyId: me.key.id, publicKey, privateKey: cPrivate }, cTrust, grantFromApi(vault.grant), vault.current_vault_key_version);
 }
 
 test('C-13（API 経由） 管理者が保存した暗号文と署名付きのグラントを、C さんが API から取得して確かめ、復号できる', async () => {
