@@ -157,7 +157,13 @@ test('C-19 署名の対象のフィールドを1つずつ書き換えたグラ�
   };
   // 宛先のメンバーID と公開鍵は、受け手が自分の値から組み立てる。サーバーが「自分の値」を偽った場合を見る。
   const otherPublicKey = (await createMemberKey('other-member-hikari-55')).record.publicKey;
+  // 署名者のメンバーID だけが違う署名（本物の管理者の鍵と鍵ID で、別のメンバーID を名乗って署名したもの）。Codex #2
+  const otherMemberTrust = newTrust('member_other_admin');
+  await pinSigner(otherMemberTrust, { ...adminPin, memberId: 'member_other_admin' }, 1);
+  const otherSignerMember = await grantToC({ ...adminSigner, memberId: 'member_other_admin', trust: otherMemberTrust }, 3);
+  assert.equal(otherSignerMember.signerKeyId, grant.signerKeyId);
   const cases: [string, Grant, OwnKey, string][] = [
+    ['署名者のメンバーID', otherSignerMember, cOwn(), 'SIGNATURE_INVALID'],
     ['署名者の鍵ID', { ...grant, signerKeyId: 'key_other_admin' }, cOwn(), 'SIGNER_MISMATCH'],
     ['世代', { ...grant, vaultKeyVersion: 4 }, cOwn(), 'SIGNATURE_INVALID'],
     ['宛先の鍵ID', { ...grant, recipientKeyId: 'key_other' }, { ...cOwn(), keyId: 'key_other' }, 'SIGNATURE_INVALID'],
