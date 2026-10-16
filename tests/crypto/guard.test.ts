@@ -57,12 +57,16 @@ test('観点表（補助） テスト用の口の検査は、動的な import �
   assert.deepEqual(hpkeCoreImporters(samples), ['static', 'dynamic', 'dynamic-spaced', 're-export', 're-export-all']);
 });
 
-test('観点表（補助） 取り出し不可：extractable を true にするのは、鍵ペアの生成と公開鍵の読み込みだけ', () => {
+test('観点表（補助） 取り出し不可：extractable を true にするのは、鍵ペアの生成（ECDH と管理者の署名鍵）と公開鍵の読み込みだけ', () => {
   const users = sources.filter((s) => /,\s*true,\s*\[/.test(code(s.text))).map((s) => s.path).sort();
   assert.deepEqual(users, ['crypto/member-key.ts', 'crypto/public-key.ts']);
   const memberKey = code(sources.find((s) => s.path === 'crypto/member-key.ts')!.text);
-  assert.equal(memberKey.match(/,\s*true,\s*\[/g)!.length, 1);
+  assert.equal(memberKey.match(/,\s*true,\s*\[/g)!.length, 2);
   assert.match(memberKey, /generateKey\(ECDH_P256, true, \['deriveBits'\]\)/);
+  assert.match(memberKey, /generateKey\(ECDSA_P256, true, \['sign', 'verify'\]\)/);
+  // 署名用公開鍵の読み込み（signer.ts）は検証にしか使わないので取り出し不可
+  const signer = code(sources.find((s) => s.path === 'crypto/signer.ts')!.text);
+  assert.match(signer, /importKey\('raw', raw, ECDSA_P256, false, \['verify'\]\)/);
 });
 
 test('観点表（補助） ログ：src から console に出力しない（トークン、Authorization ヘッダー、本文をログに出さない）', () => {

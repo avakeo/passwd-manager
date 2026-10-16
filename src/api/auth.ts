@@ -20,7 +20,13 @@ async function sha256Hex(s: string): Promise<string> {
 }
 
 // セッション、メンバー、現在の鍵の世代を、1回の結合クエリで取る。
-export async function authenticate(db: D1Database, authorization: string | undefined, method: string): Promise<Principal> {
+// allowPending：承認待ちでも呼べる入口（GET /v1/me。双方向の照合のために、管理者の署名用公開鍵を受け取る）
+export async function authenticate(
+  db: D1Database,
+  authorization: string | undefined,
+  method: string,
+  opts: { allowPending?: boolean } = {},
+): Promise<Principal> {
   const match = /^Bearer ([A-Za-z0-9_\-.~+/]+=*)$/.exec(authorization ?? '');
   if (!match) throw new HttpProblem(401);
   const row = await db
@@ -33,8 +39,8 @@ export async function authenticate(db: D1Database, authorization: string | undef
     .bind(await sha256Hex(match[1]!), Date.now())
     .first<{ member_id: string; role: 'admin' | 'member'; status: string; scope: 'extension' | 'web'; current_vault_key_version: number }>();
   if (!row) throw new HttpProblem(401);
-  // D1 で承認済み（active）でなければ、承認待ちも削除済みも 403（Z-01、Z-06）
-  if (row.status !== 'active') throw new HttpProblem(403);
+  // D1 で承認済み（active）でなければ、承認待ちも削除済みも 403（Z-01、Z-06）。承認待ちは allowPending の入口だけ通す
+  if (row.status !== 'active' && !(opts.allowPending === true && row.status === 'pending')) throw new HttpProblem(403);
   // Web ページ用のトークンは読み取り専用（Z-07）
   if (row.scope === 'web' && method !== 'GET' && method !== 'HEAD') throw new HttpProblem(403);
   return {

@@ -74,27 +74,37 @@ export function createApp() {
   );
   app.use('/v1/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) }));
   app.use('/v1/*', async (c, next) => {
-    c.set('principal', await authenticate(c.env.DB, c.req.header('Authorization'), c.req.method));
+    const allowPending = c.req.method === 'GET' && c.req.path === '/v1/me';
+    c.set('principal', await authenticate(c.env.DB, c.req.header('Authorization'), c.req.method, { allowPending }));
     await next();
   });
 
-  // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）
+  // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
+  // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。
+  // 端末は、固定した値と比べて使う。サーバーの値をそのまま信用しない（P-05）。
   app.get('/v1/me', async (c) => {
     const p = c.get('principal');
     const key = await c.env.DB.prepare(
-      `SELECT id, ecdh_public_key, encrypted_private_key, kdf_algorithm, kdf_params, kdf_salt, format_version
+      `SELECT id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
+              kdf_algorithm, kdf_params, kdf_salt, format_version
          FROM member_keys WHERE member_id = ? AND status = 'active'`,
     )
       .bind(p.memberId)
       .first();
-    return c.json({ id: p.memberId, role: p.role, key });
+    const adminSigner = await c.env.DB.prepare(
+      `SELECT m.id AS member_id, k.id AS key_id, k.ecdsa_public_key
+         FROM members m JOIN member_keys k ON k.member_id = m.id
+        WHERE m.role = 'admin' AND m.status = 'active' AND k.status = 'active' AND k.ecdsa_public_key IS NOT NULL`,
+    ).first();
+    return c.json({ id: p.memberId, role: p.role, key, admin_signer: adminSigner });
   });
 
-  // 鍵の世代と、自分の鍵宛てのグラントだけ（他人宛ては返さない：Z-04）
+  // 鍵の世代と、自分の鍵宛ての署名付きのグラントだけ（他人宛ては返さない：Z-04）
   app.get('/v1/vault', async (c) => {
     const p = c.get('principal');
     const grant = await c.env.DB.prepare(
-      `SELECT g.vault_key_version, g.recipient_key_id, g.ephemeral_public_key, g.wrapped_key, g.format_version,
+      `SELECT g.vault_key_version, g.recipient_key_id, g.ephemeral_public_key, g.wrapped_key, g.signer_key_id, g.signature,
+              g.format_version,
               (SELECT vault_revision FROM vault_meta WHERE id = 1) AS vault_revision
          FROM vault_key_grants g JOIN member_keys k ON k.id = g.recipient_key_id
         WHERE k.member_id = ? AND k.status = 'active' AND g.vault_key_version = ?`,

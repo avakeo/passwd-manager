@@ -21,12 +21,16 @@ CREATE TABLE member_keys (
   member_id TEXT NOT NULL REFERENCES members (id),
   ecdh_public_key TEXT NOT NULL,
   encrypted_private_key TEXT NOT NULL,
+  -- 管理者だけが持つ署名鍵ペア（ECDSA P-256）。管理者以外は両方 NULL
+  ecdsa_public_key TEXT,
+  encrypted_sign_private_key TEXT, -- 署名鍵のラップ鍵で暗号化。AAD は v1|admin-sign-key|鍵ID|署名用公開鍵の SHA-256
   kdf_algorithm TEXT NOT NULL,
   kdf_params TEXT NOT NULL,
   kdf_salt TEXT NOT NULL,
   format_version INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  CHECK ((ecdsa_public_key IS NULL) = (encrypted_sign_private_key IS NULL))
 );
 
 CREATE TABLE vault_key_versions (
@@ -41,6 +45,8 @@ CREATE TABLE vault_key_grants (
   recipient_key_id TEXT NOT NULL,
   ephemeral_public_key TEXT NOT NULL,
   wrapped_key TEXT NOT NULL, -- 形式、アルゴリズムID、暗号文と認証タグ。ノンスは持たない
+  signer_key_id TEXT NOT NULL, -- 署名した管理者の鍵ID
+  signature TEXT NOT NULL, -- 管理者の署名（形式、アルゴリズムID 0x03、64バイト）。サーバーは検証しない
   format_version INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (vault_key_version, recipient_key_id)

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { concat, fromHex, toHex } from '../../src/crypto/bytes.ts';
 import { MemoryPinStore, assertPinned, fingerprint, pinPublicKey } from '../../src/crypto/public-key.ts';
-import { createGrant, openGrant } from '../../src/crypto/grant.ts';
-import { createMemberKey } from '../../src/crypto/member-key.ts';
+import { createGrant, openGrant, type GrantSigner } from '../../src/crypto/grant.ts';
+import { createAdminKey, createMemberKey } from '../../src/crypto/member-key.ts';
+import { MemoryGenerationStore, MemorySignerPinStore, pinSigner } from '../../src/crypto/signer.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 
@@ -15,6 +16,9 @@ async function newPublicKey() {
   const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   return new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
 }
+
+const admin = await createAdminKey('admin-hoshi-sora-umi-42');
+const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyId, privateKey: admin.signPrivateKey };
 
 // 学習メモの公開鍵
 const memoPublicKey = concat(
@@ -79,7 +83,7 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
   let grant: unknown;
   await assert.rejects(
     (async () => {
-      grant = await createGrant({ pins, memberId: 'member_c', recipient: fromServer, vaultKeyVersion: 2, vaultKeyRaw: generateVaultKeyRaw() });
+      grant = await createGrant({ pins, signer, memberId: 'member_c', recipient: fromServer, vaultKeyVersion: 2, vaultKeyRaw: generateVaultKeyRaw() });
     })(),
     isCode('PUBLIC_KEY_MISMATCH'),
   );
@@ -88,12 +92,19 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
   // 差し替えがなければ作れて、C さんが開ける
   const ok = await createGrant({
     pins,
+    signer,
     memberId: 'member_c',
     recipient: { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey },
     vaultKeyVersion: 2,
     vaultKeyRaw: generateVaultKeyRaw(),
   });
-  await openGrant({ keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey }, ok);
+  const signerPins = new MemorySignerPinStore();
+  await pinSigner(signerPins, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
+  await openGrant(
+    { memberId: 'member_c', keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey },
+    { signerPins, generations: new MemoryGenerationStore() },
+    ok,
+  );
 });
 
 test('P-01 固定していないメンバー宛てには、グラントを作らない（照合と承認が先）', async () => {
@@ -101,6 +112,7 @@ test('P-01 固定していないメンバー宛てには、グラントを作ら
   await assert.rejects(
     createGrant({
       pins: new MemoryPinStore(),
+      signer,
       memberId: 'member_c',
       recipient: { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey },
       vaultKeyVersion: 1,
@@ -116,7 +128,7 @@ test('P-01 鍵を再登録したメンバーは、照合し直して固定する
   await pinPublicKey(pins, 'member_c', { keyId: 'key_old', publicKey: oldKey });
   const reRegistered = await createMemberKey('c-san-atarashii-kagi-2026');
   const recipient = { keyId: reRegistered.record.keyId, publicKey: reRegistered.record.publicKey };
-  const args = { pins, memberId: 'member_c', recipient, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() };
+  const args = { pins, signer, memberId: 'member_c', recipient, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() };
   await assert.rejects(createGrant(args), isCode('PUBLIC_KEY_MISMATCH'));
   // 照合し直して固定すれば作れる
   await pinPublicKey(pins, 'member_c', recipient);
@@ -132,6 +144,7 @@ test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違
   await assert.rejects(
     createGrant({
       pins,
+      signer,
       memberId: 'member_c',
       recipient: { keyId: 'key_attacker', publicKey: memberC.record.publicKey },
       vaultKeyVersion: 1,
@@ -143,8 +156,9 @@ test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違
 
 // 攻撃者レビュー #4：「照合なしで包む関数を export しない」を、ソースの文字列ではなく、読み込んだモジュールの中身で確かめる。
 // 別名を付けて export しても（export { sealGrant as createGrantInner } など）、ここで見つかる。
-test('P-01 grant.ts が export する関数は、照合してから包む createGrant と、開く側の関数だけ', async () => {
+// 開く側の関数は、署名を確かめてから開くものだけ（署名を確かめない開封の入口を作らない）。
+test('P-01 grant.ts が export する関数は、照合してから包む createGrant と、署名を確かめて開く関数と、中身を組み立てる関数だけ', async () => {
   const grant = await import('../../src/crypto/grant.ts');
   const functions = Object.entries(grant).filter(([, v]) => typeof v === 'function').map(([k]) => k).sort();
-  assert.deepEqual(functions, ['createGrant', 'grantInfo', 'openGrant', 'openGrantForAdmin']);
+  assert.deepEqual(functions, ['createGrant', 'grantInfo', 'grantSignedMessage', 'openGrant', 'openGrantForAdmin']);
 });

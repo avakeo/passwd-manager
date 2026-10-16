@@ -55,6 +55,19 @@ declare module 'node:fs' {
   export function readdirSync(path: string | URL, options: { recursive: true }): string[];
 }
 
+// 管理者署名の既知解テストで、src を使わずに署名を確かめるためだけに使う
+declare module 'node:crypto' {
+  interface KeyObject {
+    readonly type: string;
+  }
+  export function createPublicKey(input: { key: JsonWebKey; format: 'jwk' }): KeyObject;
+  interface Verify {
+    update(data: Uint8Array): Verify;
+    verify(options: { key: KeyObject; dsaEncoding: 'der' | 'ieee-p1363' }, signature: Uint8Array): boolean;
+  }
+  export function createVerify(algorithm: string): Verify;
+}
+
 declare const process: {
   argv: string[];
   exitCode: number | undefined;
