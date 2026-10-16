@@ -174,12 +174,26 @@ export function openTrust(storage: TrustStorage, scope: TrustScope): GrantTrust 
 }
 
 // 承認のとき、Discord 以外の経路で管理者の画面と見比べて一致した組だけを固定する。
+// 同時に、フィンガープリントと一緒に見比べた「今の世代」で、最後に見た世代を初期化する（DeepSeek #1）。
+// 世代が未設定のままでは、グラントを開かない（固定していないのと同じ扱い）。端末を初期化した後の照合し直しも同じ。
 // 管理者自身の端末は、ロック解除できた自分の行の値を固定する（AAD に公開鍵の SHA-256 が入っているので、差し替えた行は開けない）。
-export async function pinSigner(trust: GrantTrust, pin: SignerPin): Promise<void> {
+// 世代は、メンバーの端末に出ている世代と対面で見比べた値で初期化する（DeepSeek #7）。
+export async function pinSigner(trust: GrantTrust, pin: SignerPin, vaultKeyVersion: number): Promise<void> {
   assertId(pin.memberId);
   assertId(pin.keyId);
+  assertVersion(vaultKeyVersion);
   await importSignPublicKey(pin.publicKey);
+  // 世代を先に書く。途中で止まっても「固定はあるが世代がない」状態にはならない
+  await trust.generations.raise(vaultKeyVersion);
   await trust.signerPins.set(copyPin(pin));
+}
+
+// グラントを開く・作る前の確認：署名鍵の固定と、最後に見た世代の両方がそろっていること。
+export async function pinnedSignerAndGeneration(trust: GrantTrust): Promise<{ signer: SignerPin; lastSeen: number }> {
+  const signer = await trust.signerPins.get();
+  const lastSeen = await trust.generations.get();
+  if (signer === undefined || lastSeen === undefined) throw new CryptoError('SIGNER_NOT_PINNED');
+  return { signer, lastSeen };
 }
 
 // サーバーが返した管理者の組が、固定した組と一致するかを確かめる（P-05）。公開鍵は65バイトそのもので比べる。

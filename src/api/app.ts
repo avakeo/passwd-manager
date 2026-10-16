@@ -96,7 +96,8 @@ export function createApp() {
          FROM members m JOIN member_keys k ON k.member_id = m.id
         WHERE m.role = 'admin' AND m.status = 'active' AND k.status = 'active' AND k.ecdsa_public_key IS NOT NULL`,
     ).first();
-    return c.json({ id: p.memberId, role: p.role, key, admin_signer: adminSigner });
+    // 今の世代は、承認の照合で管理者の画面と見比べ、最後に見た世代の初期化に使う（DeepSeek #1）
+    return c.json({ id: p.memberId, role: p.role, current_vault_key_version: p.currentVaultKeyVersion, key, admin_signer: adminSigner });
   });
 
   // 鍵の世代と、自分の鍵宛ての署名付きのグラントだけ（他人宛ては返さない：Z-04）

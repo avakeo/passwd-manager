@@ -57,12 +57,15 @@ function ownKey(m: Member, privateKey: CryptoKey = m.privateKey): OwnKey {
   return { memberId: memberIdOf.get(m)!, keyId: m.record.keyId, publicKey: m.record.publicKey, privateKey };
 }
 
-const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyId, privateKey: admin.signPrivateKey };
+const adminPin = { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey };
+const adminTrust = newTrust('member_admin');
+await pinSigner(adminTrust, adminPin, 1);
+const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyId, privateKey: admin.signPrivateKey, trust: adminTrust };
 
 // 各メンバーの端末：管理者の署名鍵を照合して固定済み
 async function trust(): Promise<GrantTrust> {
   const t = newTrust();
-  await pinSigner(t, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
+  await pinSigner(t, adminPin, 1);
   return t;
 }
 

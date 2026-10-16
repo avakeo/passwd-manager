@@ -19,7 +19,10 @@ async function newPublicKey() {
 }
 
 const admin = await createAdminKey('admin-hoshi-sora-umi-42');
-const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyId, privateKey: admin.signPrivateKey };
+const adminPin = { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey };
+const adminTrust = newTrust('member_admin');
+await pinSigner(adminTrust, adminPin, 1);
+const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyId, privateKey: admin.signPrivateKey, trust: adminTrust };
 
 // 学習メモの公開鍵
 const memoPublicKey = concat(
@@ -100,7 +103,7 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
     vaultKeyRaw: generateVaultKeyRaw(),
   });
   const trust = newTrust('member_c');
-  await pinSigner(trust, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
+  await pinSigner(trust, adminPin, 1);
   await openGrant(
     { memberId: 'member_c', keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey },
     trust,

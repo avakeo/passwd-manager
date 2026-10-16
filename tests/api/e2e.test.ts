@@ -66,6 +66,7 @@ function insertGrant(t: Setup, grant: Grant) {
 
 type MeResponse = {
   id: string;
+  current_vault_key_version: number;
   key: { id: string; ecdh_public_key: string; encrypted_private_key: string; kdf_algorithm: string; kdf_params: string; kdf_salt: string };
   admin_signer: { member_id: string; key_id: string; ecdsa_public_key: string } | null;
 };
@@ -97,18 +98,24 @@ async function approved() {
   insertKey(t, adminSession.id, adminKey.record);
   insertKey(t, cSession.id, cKey.record);
 
-  // 承認のときの双方向の照合。C さんの端末は、API から受け取った管理者の署名鍵のフィンガープリントを、
-  // 管理者の画面（管理者の端末が自分で作った値）と見比べ、一致した組を固定する
+  // 管理者の端末：自分の組を固定し、世代1で初期化済み（初期化のときに世代1を作った）
+  const adminPin = { memberId: adminSession.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey };
+  const adminTrust = newTrust(adminSession.id);
+  await pinSigner(adminTrust, adminPin, 1);
+
+  // 承認のときの双方向の照合。C さんの端末は、API から受け取った管理者の署名鍵のフィンガープリントと今の世代を、
+  // 管理者の画面（管理者の端末が持つ値）と見比べ、一致したら組を固定し、その世代で最後に見た世代を初期化する
   const me = (await (await t.request('GET', '/v1/me', cSession.token)).json()) as MeResponse;
   const fromServer = signerFromApi(me.admin_signer!);
   assert.equal(await fingerprint(fromServer.publicKey), await fingerprint(adminKey.record.signPublicKey));
+  assert.equal(me.current_vault_key_version, await adminTrust.generations.get());
   const cTrust = newTrust(cSession.id);
-  await pinSigner(cTrust, fromServer);
+  await pinSigner(cTrust, fromServer, me.current_vault_key_version);
 
   // 管理者の端末は、C さんの公開鍵を照合して固定する
   const pins = new MemoryPinStore();
   await pinPublicKey(pins, cSession.id, { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey });
-  const signer: GrantSigner = { memberId: adminSession.id, keyId: adminKey.record.keyId, privateKey: adminKey.signPrivateKey };
+  const signer: GrantSigner = { memberId: adminSession.id, keyId: adminKey.record.keyId, privateKey: adminKey.signPrivateKey, trust: adminTrust };
   return { t, adminSession, cSession, cTrust, pins, signer };
 }
 
@@ -184,17 +191,20 @@ test('C-18（API 経由） サーバーが書き換えた偽グラントを、C 
   const { t, cSession, cTrust } = await approved();
   const attackerPins = new MemoryPinStore();
   await pinPublicKey(attackerPins, cSession.id, { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey });
+  // 攻撃者の手元の端末（管理者の名前と鍵ID を名乗り、自分の署名鍵を固定したことにする）
+  const attackerTrust = newTrust('member_1');
+  await pinSigner(attackerTrust, { memberId: 'member_1', keyId: adminKey.record.keyId, publicKey: attackerKey.record.signPublicKey }, 1);
   const evil = await createGrant({
     pins: attackerPins,
-    signer: { memberId: 'member_1', keyId: adminKey.record.keyId, privateKey: attackerKey.signPrivateKey },
+    signer: { memberId: 'member_1', keyId: adminKey.record.keyId, privateKey: attackerKey.signPrivateKey, trust: attackerTrust },
     memberId: cSession.id,
     recipient: { keyId: cKey.record.keyId, publicKey: cKey.record.publicKey },
-    vaultKeyVersion: 1,
+    vaultKeyVersion: 1, // 本物の C さん宛ての行（世代1）を置き換える
     vaultKeyRaw: generateVaultKeyRaw(),
   });
   insertGrant(t, evil);
   await assert.rejects(cOpensFromApi(t, cSession.token, cTrust), (e: unknown) => e instanceof CryptoError && e.code === 'SIGNATURE_INVALID');
-  assert.equal(await cTrust.generations.get(), undefined);
+  assert.equal(await cTrust.generations.get(), 1, '照合のときに初期化した世代のまま');
 });
 
 test('P-05（API 経由） サーバーが /v1/me で返す管理者の署名用公開鍵を差し替えると、C さんの端末が検知する', async () => {

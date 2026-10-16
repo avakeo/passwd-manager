@@ -18,7 +18,7 @@ import {
 } from './format.ts';
 import { openBase, sealBase } from './hpke.ts';
 import { PUBLIC_KEY_LENGTH, assertPinned, importPublicKey, type PinnedKey, type PinStore } from './public-key.ts';
-import { importSignPublicKey, signMessage, verifySignature, type GrantTrust } from './signer.ts';
+import { importSignPublicKey, pinnedSignerAndGeneration, signMessage, verifySignature, type GrantTrust } from './signer.ts';
 import { VAULT_KEY_LENGTH, importVaultKey } from './vault-key.ts';
 
 const GRANT_INFO_LABEL = 'teampw/v1/vault-key-grant';
@@ -88,10 +88,12 @@ export type Grant = {
 export type GrantRecipient = PinnedKey;
 
 // 署名する管理者。署名用秘密鍵はロック解除済み、取り出し不可、用途は sign だけ。
+// trust は管理者自身の端末の信頼の状態。世代を対面で初期化するまでは、グラントを作らない（DeepSeek #7）。
 export type GrantSigner = {
   memberId: string;
   keyId: string;
   privateKey: CryptoKey;
+  trust: GrantTrust;
 };
 
 // 固定値との照合なしで包む中身。export しない（照合を飛ばしてグラントを作る経路を作らない）。
@@ -116,6 +118,11 @@ export async function createGrant(args: {
   await assertPinned(args.pins, args.memberId, args.recipient);
   assertId(args.signer.memberId);
   assertId(args.signer.keyId);
+  // 管理者の端末に、自分の組の固定と最後に見た世代がそろっていること。最後に見た世代より古い世代では作らない
+  const { signer, lastSeen } = await pinnedSignerAndGeneration(args.signer.trust);
+  if (signer.memberId !== args.signer.memberId || signer.keyId !== args.signer.keyId) throw new CryptoError('SIGNER_MISMATCH');
+  assertVersion(args.vaultKeyVersion);
+  if (args.vaultKeyVersion < lastSeen) throw new CryptoError('STALE_GENERATION');
   const { ephemeralPublicKey, wrappedKey } = await sealGrant(args.recipient, args.vaultKeyVersion, args.vaultKeyRaw);
   const message = grantSignedMessage({
     signerMemberId: args.signer.memberId,
@@ -150,17 +157,15 @@ export type { GrantTrust };
 
 // 開く前に、設計案 4.3 の順で確かめる。1つでも違えば開かない。
 async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<void> {
-  // 1. 管理者の署名用公開鍵を固定している
-  const signer = await trust.signerPins.get();
-  if (signer === undefined) throw new CryptoError('SIGNER_NOT_PINNED');
+  // 1. 管理者の署名用公開鍵を固定し、最後に見た世代も初期化してある（未設定なら、固定していないのと同じ扱い）
+  const { signer, lastSeen } = await pinnedSignerAndGeneration(trust);
   // 2. 署名者の鍵ID が、固定した鍵ID と一致する
   if (grant.signerKeyId !== signer.keyId) throw new CryptoError('SIGNER_MISMATCH');
   // 3. 署名の長さ、形式、アルゴリズムID
   const signature = parseSignatureEnvelope(grant.signature);
   // 4. 最後に見た世代より古くない（C-20）
   assertVersion(grant.vaultKeyVersion);
-  const lastSeen = await trust.generations.get();
-  if (lastSeen !== undefined && grant.vaultKeyVersion < lastSeen) throw new CryptoError('STALE_GENERATION');
+  if (grant.vaultKeyVersion < lastSeen) throw new CryptoError('STALE_GENERATION');
   // 5. 宛先の鍵ID が自分の鍵ID と一致する
   if (grant.recipientKeyId !== own.keyId) throw decryptFailed();
   // 6. 署名する中身は、グラントの行の値ではなく、固定した署名者と自分の値から組み立てる
