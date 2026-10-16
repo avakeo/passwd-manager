@@ -4,6 +4,15 @@ declare module 'node:test' {
   type TestFn = () => void | Promise<void>;
   export function test(name: string, fn: TestFn): Promise<void>;
   export function describe(name: string, fn: () => void): Promise<void>;
+  export function after(fn: () => void | Promise<void>): void;
+  // 時刻を固定する（TOTP のテスト）。Date だけを置き換える
+  export const mock: {
+    timers: {
+      enable(options: { apis: 'Date'[]; now?: number }): void;
+      setTime(milliseconds: number): void;
+      reset(): void;
+    };
+  };
 }
 
 declare module 'node:assert/strict' {
@@ -53,7 +62,7 @@ declare module 'node:fs' {
   export function writeFileSync(path: string | URL, data: string): void;
   export function existsSync(path: string | URL): boolean;
   export function mkdirSync(path: string | URL, options?: { recursive?: boolean }): void;
-  export function readdirSync(path: string | URL, options: { recursive: true }): string[];
+  export function readdirSync(path: string | URL, options?: { recursive: true }): string[];
 }
 
 // 管理者署名の既知解テストで、src を使わずに署名を確かめるためだけに使う
@@ -67,9 +76,43 @@ declare module 'node:crypto' {
     verify(options: { key: KeyObject; dsaEncoding: 'der' | 'ieee-p1363' }, signature: Uint8Array): boolean;
   }
   export function createVerify(algorithm: string): Verify;
+  // TOTP のテストで、src を使わずにコードを計算するためだけに使う
+  interface Hmac {
+    update(data: Uint8Array): Hmac;
+    digest(): Uint8Array;
+  }
+  export function createHmac(algorithm: 'sha1' | 'sha256', key: Uint8Array): Hmac;
+}
+
+// 手動確認のスクリプト（scripts/discord-login-check.ts）で、認可コードを受け取るためだけに使う
+declare module 'node:http' {
+  interface IncomingMessage {
+    url?: string;
+  }
+  interface ServerResponse {
+    writeHead(status: number, headers?: Record<string, string>): ServerResponse;
+    end(body?: string): void;
+  }
+  interface Server {
+    listen(port: number, host: string, callback?: () => void): Server;
+    close(): void;
+  }
+  export function createServer(handler: (req: IncomingMessage, res: ServerResponse) => void): Server;
+}
+
+// 手動確認のスクリプトで、TOTP のコードを1行だけ読むために使う
+declare module 'node:readline/promises' {
+  interface Interface {
+    question(query: string): Promise<string>;
+    close(): void;
+  }
+  export function createInterface(options: { input: unknown; output: unknown }): Interface;
 }
 
 declare const process: {
   argv: string[];
   exitCode: number | undefined;
+  env: Record<string, string | undefined>;
+  stdin: unknown;
+  stdout: unknown;
 };

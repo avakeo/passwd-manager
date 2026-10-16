@@ -2,7 +2,7 @@
 // 実際の D1 では確かめていない（README に記載）。
 
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import type { D1Database, D1PreparedStatement, D1Result } from '../../src/api/d1.ts';
 
 type Value = null | number | string;
@@ -49,7 +49,11 @@ export class SqliteD1 implements D1Database {
 
   constructor() {
     this.db = new DatabaseSync(':memory:');
-    this.db.exec(readFileSync(new URL('../../migrations/0001_init.sql', import.meta.url), 'utf8'));
+    // migrations/ のファイルを番号の順にすべて流す（本番の wrangler d1 migrations apply と同じ順）
+    const dir = new URL('../../migrations/', import.meta.url);
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+      this.db.exec(readFileSync(new URL(file, dir), 'utf8'));
+    }
   }
 
   prepare(sql: string): D1PreparedStatement {

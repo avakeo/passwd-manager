@@ -5,13 +5,16 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
-import { authenticate, type Principal } from './auth.ts';
+import { authenticate, authorize, routeKey } from './auth.ts';
+import { registerAuthRoutes } from './auth-routes.ts';
 import type { D1Database } from './d1.ts';
+import type { Env } from './env.ts';
+import { readJson } from './json.ts';
 import { HttpProblem, problem } from './problem.ts';
+import type { Principal } from './auth.ts';
 import { fromBase64Url } from '../crypto/bytes.ts';
 import { ALG_AES_256_GCM, FORMAT_V1 } from '../crypto/format.ts';
 
-type Env = { Bindings: { DB: D1Database }; Variables: { principal: Principal } };
 
 export const WEB_ORIGIN = 'https://pw.example.com'; // 仮の表記。CORS で許可するのはこの1つだけ
 
@@ -39,19 +42,6 @@ function isPositiveInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
 }
 
-async function readJson(req: Request, keys: string[]): Promise<Record<string, unknown>> {
-  let body: unknown;
-  try {
-    body = JSON.parse(await req.text());
-  } catch {
-    throw new HttpProblem(400);
-  }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new HttpProblem(400);
-  const actual = Object.keys(body).sort().join(',');
-  if (actual !== [...keys].sort().join(',')) throw new HttpProblem(400); // 想定外の項目も拒否する
-  return body as Record<string, unknown>;
-}
-
 function itemIdParam(id: string): string {
   if (!ID_PATTERN.test(id)) throw new HttpProblem(400);
   return id;
@@ -73,11 +63,20 @@ export function createApp() {
     }),
   );
   app.use('/v1/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) }));
+  // 公開の入口（ログイン、更新、TOTP の一時トークン）のほかは、セッションで認証し、認可の表（auth.ts の authorize）で確かめる
   app.use('/v1/*', async (c, next) => {
-    const allowPending = c.req.method === 'GET' && c.req.path === '/v1/me';
-    c.set('principal', await authenticate(c.env.DB, c.req.header('Authorization'), c.req.method, { allowPending }));
+    const key = routeKey(c.req.method, c.req.path);
+    const isPublic =
+      key === 'POST /v1/auth/discord' || key === 'POST /v1/auth/refresh' || (key === 'POST /v1/auth/totp' && c.req.header('Authorization') === undefined);
+    if (!isPublic) {
+      const p = await authenticate(c.env.DB, c.req.header('Authorization'));
+      authorize(p, c.req.method, c.req.path);
+      c.set('principal', p);
+    }
     await next();
   });
+
+  registerAuthRoutes(app);
 
   // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
   // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。
