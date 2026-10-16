@@ -49,18 +49,18 @@ test('固定できるのは正しい公開鍵だけ', async () => {
   const store = new MemoryPinStore();
   const bad = memoPublicKey.slice();
   bad[64]! ^= 1; // 曲線上にない点になる
-  await assert.rejects(pinPublicKey(store, 'member_c', bad), isCode('INVALID_PUBLIC_KEY'));
+  await assert.rejects(pinPublicKey(store, 'member_c', { keyId: 'key_c', publicKey: bad }), isCode('INVALID_PUBLIC_KEY'));
 });
 
 test('固定値との比較は、表示用の文字列ではなく公開鍵のバイト列で行う', async () => {
   const store = new MemoryPinStore();
   const a = await newPublicKey();
-  await pinPublicKey(store, 'member_c', a);
-  await assertPinned(store, 'member_c', a.slice());
-  await assert.rejects(assertPinned(store, 'member_c', await newPublicKey()), isCode('PUBLIC_KEY_MISMATCH'));
+  await pinPublicKey(store, 'member_c', { keyId: 'key_c', publicKey: a });
+  await assertPinned(store, 'member_c', { keyId: 'key_c', publicKey: a.slice() });
+  await assert.rejects(assertPinned(store, 'member_c', { keyId: 'key_c', publicKey: await newPublicKey() }), isCode('PUBLIC_KEY_MISMATCH'));
   // 固定した後で呼び出し側の配列を書き換えても、固定値は変わらない
   a[10]! ^= 1;
-  await assert.rejects(assertPinned(store, 'member_c', a), isCode('PUBLIC_KEY_MISMATCH'));
+  await assert.rejects(assertPinned(store, 'member_c', { keyId: 'key_c', publicKey: a }), isCode('PUBLIC_KEY_MISMATCH'));
 });
 
 // P-01 の場面：
@@ -71,7 +71,7 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
   const memberC = await createMemberKey('c-san-kawa-mori-yama-18');
   const attacker = await createMemberKey('attacker-kuro-yami-99x');
   const pins = new MemoryPinStore();
-  await pinPublicKey(pins, 'member_c', memberC.record.publicKey);
+  await pinPublicKey(pins, 'member_c', { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey });
 
   // サーバーが返す C さんの鍵情報（公開鍵だけ攻撃者のものに差し替えられている）
   const fromServer = { keyId: memberC.record.keyId, publicKey: attacker.record.publicKey };
@@ -113,12 +113,30 @@ test('P-01 固定していないメンバー宛てには、グラントを作ら
 test('P-01 鍵を再登録したメンバーは、照合し直して固定するまでグラントを作れない', async () => {
   const pins = new MemoryPinStore();
   const oldKey = await newPublicKey();
-  await pinPublicKey(pins, 'member_c', oldKey);
+  await pinPublicKey(pins, 'member_c', { keyId: 'key_old', publicKey: oldKey });
   const reRegistered = await createMemberKey('c-san-atarashii-kagi-2026');
   const recipient = { keyId: reRegistered.record.keyId, publicKey: reRegistered.record.publicKey };
   const args = { pins, memberId: 'member_c', recipient, vaultKeyVersion: 1, vaultKeyRaw: generateVaultKeyRaw() };
   await assert.rejects(createGrant(args), isCode('PUBLIC_KEY_MISMATCH'));
   // 照合し直して固定すれば作れる
-  await pinPublicKey(pins, 'member_c', reRegistered.record.publicKey);
+  await pinPublicKey(pins, 'member_c', recipient);
   await createGrant({ ...args, vaultKeyRaw: generateVaultKeyRaw() });
+});
+
+// 攻撃者レビュー #2：サーバーが、公開鍵は固定値のままで、鍵ID だけを別の値にして返す。
+// 通してしまうと、正しい鍵ID 宛てのグラントが作られず、C さんは開けない（承認が気づかれずに失敗する）。
+test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違えばグラントを作らない', async () => {
+  const memberC = await createMemberKey('c-san-kawa-mori-yama-18');
+  const pins = new MemoryPinStore();
+  await pinPublicKey(pins, 'member_c', { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey });
+  await assert.rejects(
+    createGrant({
+      pins,
+      memberId: 'member_c',
+      recipient: { keyId: 'key_attacker', publicKey: memberC.record.publicKey },
+      vaultKeyVersion: 1,
+      vaultKeyRaw: generateVaultKeyRaw(),
+    }),
+    isCode('PUBLIC_KEY_MISMATCH'),
+  );
 });

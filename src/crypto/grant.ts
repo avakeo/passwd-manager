@@ -7,7 +7,7 @@ import { utf8, wipe, type Bytes } from './bytes.ts';
 import { CryptoError, decryptFailed } from './errors.ts';
 import { assertId, assertVersion, encodeGrantEnvelope, parseGrantEnvelope } from './format.ts';
 import { openBase, sealBase } from './hpke.ts';
-import { assertPinned, importPublicKey, type PinStore } from './public-key.ts';
+import { assertPinned, importPublicKey, type PinnedKey, type PinStore } from './public-key.ts';
 import { VAULT_KEY_LENGTH, importVaultKey } from './vault-key.ts';
 
 const GRANT_INFO_LABEL = 'teampw/v1/vault-key-grant';
@@ -27,10 +27,8 @@ export type Grant = {
   wrappedKey: Bytes; // 形式、アルゴリズムID、暗号文と認証タグ
 };
 
-export type GrantRecipient = {
-  keyId: string;
-  publicKey: Bytes; // サーバーから受け取った公開鍵
-};
+// サーバーから受け取った宛先の鍵ID と公開鍵
+export type GrantRecipient = PinnedKey;
 
 // 固定値との照合なしで包む中身。export しない（照合を飛ばしてグラントを作る経路を作らない）。
 async function sealGrant(recipient: GrantRecipient, vaultKeyVersion: number, vaultKeyRaw: Bytes): Promise<Grant> {
@@ -46,7 +44,7 @@ async function sealGrant(recipient: GrantRecipient, vaultKeyVersion: number, vau
   };
 }
 
-// 管理者がグラントを作る唯一の入口。最初に、サーバーから受け取った公開鍵を、端末に固定した値と照合する（P-01）。
+// 管理者がグラントを作る唯一の入口。最初に、サーバーから受け取った鍵ID と公開鍵を、端末に固定した組と照合する（P-01）。
 // 一致しなければ何も包まずに止める。
 export async function createGrant(args: {
   pins: PinStore;
@@ -55,7 +53,7 @@ export async function createGrant(args: {
   vaultKeyVersion: number;
   vaultKeyRaw: Bytes;
 }): Promise<Grant> {
-  await assertPinned(args.pins, args.memberId, args.recipient.publicKey);
+  await assertPinned(args.pins, args.memberId, args.recipient);
   return sealGrant(args.recipient, args.vaultKeyVersion, args.vaultKeyRaw);
 }
 

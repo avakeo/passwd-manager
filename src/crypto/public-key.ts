@@ -34,35 +34,47 @@ export async function fingerprint(publicKey: Bytes): Promise<string> {
   return groups.join(' ');
 }
 
-// 管理者の端末に置く「照合済み公開鍵」の保存先。提出版はインターフェースだけで、拡張機能で chrome.storage.local に差し替える。
+// 承認のときに照合した鍵。鍵ID と公開鍵を組で固定する（公開鍵だけが同じで鍵ID が違う宛先にも、グラントを作らない）。
+export type PinnedKey = {
+  keyId: string;
+  publicKey: Bytes;
+};
+
+// 管理者の端末に置く「照合済み公開鍵」の保存先。メンバーID ごとに、鍵ID と公開鍵の組を持つ。
+// 提出版はインターフェースだけで、拡張機能で chrome.storage.local に差し替える。
 export interface PinStore {
-  get(memberId: string): Promise<Bytes | undefined>;
-  set(memberId: string, publicKey: Bytes): Promise<void>;
+  get(memberId: string): Promise<PinnedKey | undefined>;
+  set(memberId: string, key: PinnedKey): Promise<void>;
 }
 
 export class MemoryPinStore implements PinStore {
-  readonly #pins = new Map<string, Bytes>();
+  readonly #pins = new Map<string, PinnedKey>();
 
-  async get(memberId: string): Promise<Bytes | undefined> {
-    return this.#pins.get(memberId)?.slice();
+  async get(memberId: string): Promise<PinnedKey | undefined> {
+    const pinned = this.#pins.get(memberId);
+    return pinned && { keyId: pinned.keyId, publicKey: pinned.publicKey.slice() };
   }
 
-  async set(memberId: string, publicKey: Bytes): Promise<void> {
-    this.#pins.set(memberId, publicKey.slice());
+  async set(memberId: string, key: PinnedKey): Promise<void> {
+    this.#pins.set(memberId, { keyId: key.keyId, publicKey: key.publicKey.slice() });
   }
 }
 
-// 承認のとき、Discord 以外の経路でフィンガープリントを照合できた公開鍵だけを固定する。
-export async function pinPublicKey(store: PinStore, memberId: string, publicKey: Bytes): Promise<void> {
+// 承認のとき、Discord 以外の経路でフィンガープリントを照合できた公開鍵だけを、鍵ID と組にして固定する。
+export async function pinPublicKey(store: PinStore, memberId: string, key: PinnedKey): Promise<void> {
   assertId(memberId);
-  await importPublicKey(publicKey);
-  await store.set(memberId, publicKey.slice());
+  assertId(key.keyId);
+  await importPublicKey(key.publicKey);
+  await store.set(memberId, { keyId: key.keyId, publicKey: key.publicKey.slice() });
 }
 
-// グラントを作るたびに、サーバーから受け取った公開鍵が固定値と一致するかを確かめる。比較は65バイトそのもので行う。
-export async function assertPinned(store: PinStore, memberId: string, publicKey: Bytes): Promise<void> {
+// グラントを作るたびに、サーバーから受け取った鍵ID と公開鍵が、固定した組と一致するかを確かめる。
+// 公開鍵の比較は65バイトそのもので行う。
+export async function assertPinned(store: PinStore, memberId: string, key: PinnedKey): Promise<void> {
   assertId(memberId);
   const pinned = await store.get(memberId);
   if (pinned === undefined) throw new CryptoError('PUBLIC_KEY_NOT_PINNED');
-  if (!equalBytes(pinned, publicKey)) throw new CryptoError('PUBLIC_KEY_MISMATCH');
+  if (pinned.keyId !== key.keyId || !equalBytes(pinned.publicKey, key.publicKey)) {
+    throw new CryptoError('PUBLIC_KEY_MISMATCH');
+  }
 }

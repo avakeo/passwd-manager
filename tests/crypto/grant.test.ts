@@ -33,7 +33,7 @@ function recipient(m: typeof admin) {
 // 管理者の端末：3人とも照合済みとして公開鍵を固定しておく
 const pins = new MemoryPinStore();
 for (const [id, m] of [['member_admin', admin], ['member_c', memberC], ['member_b', memberB]] as const) {
-  await pinPublicKey(pins, id, m.record.publicKey);
+  await pinPublicKey(pins, id, recipient(m));
 }
 const memberIdOf = new Map([[admin, 'member_admin'], [memberC, 'member_c'], [memberB, 'member_b']]);
 
@@ -136,7 +136,7 @@ test('管理操作では、グラントを開き直して生の Vault 鍵を得�
 test('既知の弱点（範囲外）：乗っ取られたサーバーは既存メンバー宛ての偽グラントを作れ、メンバーは気づかずに開いて使う', async () => {
   // 攻撃者：D1 から C さんの鍵ID と公開鍵を読み、自分の端末で固定したことにして、自分が知る Vault 鍵を包む
   const attackerPins = new MemoryPinStore();
-  await pinPublicKey(attackerPins, 'member_c', memberC.record.publicKey);
+  await pinPublicKey(attackerPins, 'member_c', recipient(memberC));
   const evilVaultKeyRaw = generateVaultKeyRaw();
   const evilGrant = await createGrant({
     pins: attackerPins,
