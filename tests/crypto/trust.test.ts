@@ -79,3 +79,38 @@ test('P-09 接続先は https のオリジンだけ、メンバー ID は ID の
   }
   assert.throws(() => openTrust(storage, { apiOrigin: API, memberId: 'member|a' }), isCode('INVALID_INPUT'));
 });
+
+// 非同期の保存先（chrome.storage.local など）を真似る。書き込みは、小さい世代ほど遅く終わる。
+// 「読んでから比べて書く」を別々の操作で行うと、同時に開いたときに小さい世代が後から上書きしてしまう。
+class SlowStorage extends MemoryTrustStorage {
+  override async get(key: string): Promise<string | undefined> {
+    await new Promise((r) => setTimeout(r, 5));
+    return super.get(key);
+  }
+
+  override async set(key: string, value: string): Promise<void> {
+    const n = Number(value);
+    await new Promise((r) => setTimeout(r, Number.isFinite(n) ? Math.max(0, 60 - 20 * n) : 0));
+    return super.set(key, value);
+  }
+}
+
+test('C-20 最後に見た世代の更新は保存先の1つの操作で、同時に開いても大きい方が残る（Codex #1）', async () => {
+  for (const versions of [[1, 2], [2, 1], [3, 2], [2, 3]]) {
+    const trust = openTrust(new SlowStorage(), { apiOrigin: API, memberId: 'member_a' });
+    await pinSigner(trust, adminPin);
+    await trust.generations.raise(1);
+    const grants = await Promise.all(versions.map((v) => grantTo(memberA, 'member_a', v)));
+    await Promise.all(grants.map((g) => openGrant(own(memberA, 'member_a'), trust, g)));
+    assert.equal(await trust.generations.get(), Math.max(...versions), `同時に開いた世代 ${versions.join('、')}`);
+  }
+});
+
+test('C-20 世代の記録は上げるだけで、下げられない（Codex #1）', async () => {
+  const trust = openTrust(new SlowStorage(), { apiOrigin: API, memberId: 'member_a' });
+  await Promise.all([trust.generations.raise(4), trust.generations.raise(2), trust.generations.raise(3)]);
+  assert.equal(await trust.generations.get(), 4);
+  assert.equal(await trust.generations.raise(1), 4);
+  assert.equal(await trust.generations.get(), 4);
+  assert.equal(await trust.generations.raise(5), 5);
+});

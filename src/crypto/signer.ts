@@ -53,9 +53,10 @@ export interface SignerPinStore {
 }
 
 // 端末が最後に見た Vault 鍵の世代。これより古い世代のグラントは受け付けない（C-20）。
+// 書き込みは raise の1つだけ。今の値より大きいときだけ上げ、更新後の値を返す（下げる口は作らない）。
 export interface GenerationStore {
   get(): Promise<number | undefined>;
-  set(vaultKeyVersion: number): Promise<void>;
+  raise(vaultKeyVersion: number): Promise<number>;
 }
 
 // 端末の信頼の状態：固定した管理者の署名用公開鍵と、最後に見た世代
@@ -100,6 +101,21 @@ function assertApiOrigin(apiOrigin: string): void {
   if (url.protocol !== 'https:' || url.origin !== apiOrigin || apiOrigin.includes('|')) throw new CryptoError('INVALID_INPUT');
 }
 
+// 保存先とキーごとに、読み書きを1つずつ順に行う。非同期の保存先で raise が同時に呼ばれても、
+// 「読む → 比べる → 書く」の間に別の raise が割り込まない（Codex #1）。
+const queues = new WeakMap<TrustStorage, Map<string, Promise<unknown>>>();
+
+function serialized<T>(storage: TrustStorage, key: string, task: () => Promise<T>): Promise<T> {
+  let byKey = queues.get(storage);
+  if (byKey === undefined) {
+    byKey = new Map();
+    queues.set(storage, byKey);
+  }
+  const run = (byKey.get(key) ?? Promise.resolve()).then(task, task);
+  byKey.set(key, run.catch(() => undefined));
+  return run;
+}
+
 function trustKey(scope: TrustScope, name: 'signer' | 'generation'): string {
   return `teampw/v1/trust|${scope.apiOrigin}|${scope.memberId}|${name}`;
 }
@@ -142,10 +158,16 @@ export function openTrust(storage: TrustStorage, scope: TrustScope): GrantTrust 
       },
     },
     generations: {
-      get: async () => parseVersion(await storage.get(trustKey(s, 'generation'))),
-      set: async (vaultKeyVersion) => {
+      get: () => serialized(storage, trustKey(s, 'generation'), async () => parseVersion(await storage.get(trustKey(s, 'generation')))),
+      raise: (vaultKeyVersion) => {
         assertVersion(vaultKeyVersion);
-        await storage.set(trustKey(s, 'generation'), String(vaultKeyVersion));
+        const key = trustKey(s, 'generation');
+        return serialized(storage, key, async () => {
+          const current = parseVersion(await storage.get(key));
+          if (current !== undefined && current >= vaultKeyVersion) return current;
+          await storage.set(key, String(vaultKeyVersion));
+          return vaultKeyVersion;
+        });
       },
     },
   };

@@ -190,9 +190,8 @@ async function openGrantRaw(own: OwnKey, trust: GrantTrust, grant: Grant): Promi
     wipe(raw);
     throw decryptFailed();
   }
-  // 8. 開けたら、最後に見た世代を進める（戻さない）
-  const lastSeen = await trust.generations.get();
-  if (lastSeen === undefined || grant.vaultKeyVersion > lastSeen) await trust.generations.set(grant.vaultKeyVersion);
+  // 8. 開けたら、最後に見た世代を進める（保存先の1つの操作で、今の値より大きいときだけ上げる）
+  await trust.generations.raise(grant.vaultKeyVersion);
   return raw;
 }
 
