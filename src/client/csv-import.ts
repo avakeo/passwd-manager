@@ -8,16 +8,17 @@ export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boo
 type ParsedRow = { row: number; cells: string[] };
 
 // RFC 4180 形式の最低限の状態機械。壊れた行は物理行末まで飛ばして次へ進む。
-function parseCsv(source: string): { rows: ParsedRow[]; errors: CsvIssue[] } {
+function parseCsv(source: string, lineOffset = 0): { rows: ParsedRow[]; errors: CsvIssue[] } {
   const rows: ParsedRow[] = [];
   const errors: CsvIssue[] = [];
   const csv = source.replace(/^\uFEFF/, '');
-  let row = 1, start = 1, cells: string[] = [], cell = '', state: 'start' | 'plain' | 'quoted' | 'after' = 'start';
+  let row = 1 + lineOffset, start = row, cells: string[] = [], cell = '', state: 'start' | 'plain' | 'quoted' | 'after' = 'start';
+  let recoveryOffset: number | undefined;
   let i = 0;
   const finish = () => {
     cells.push(cell);
     if (cells.some((v) => v !== '')) rows.push({ row: start, cells });
-    cells = []; cell = ''; state = 'start'; start = row;
+    cells = []; cell = ''; state = 'start'; start = row; recoveryOffset = undefined;
   };
   while (i < csv.length) {
     const ch = csv[i]!;
@@ -28,7 +29,7 @@ function parseCsv(source: string): { rows: ParsedRow[]; errors: CsvIssue[] } {
         if (csv[i + 1] === '"') { cell += '"'; i += 2; continue; }
         state = 'after'; i++; continue;
       }
-      if (newline) { cell += '\n'; row++; i += step; continue; }
+      if (newline) { if (recoveryOffset === undefined) recoveryOffset = i + step; cell += '\n'; row++; i += step; continue; }
       cell += ch; i++; continue;
     }
     if (newline) { row++; finish(); i += step; continue; }
@@ -42,7 +43,13 @@ function parseCsv(source: string): { rows: ParsedRow[]; errors: CsvIssue[] } {
     }
     state = 'plain'; cell += ch; i++;
   }
-  if (state === 'quoted') errors.push({ row: start, reason: 'unclosed quoted field' });
+  if (state === 'quoted') {
+    errors.push({ row: start, reason: 'unclosed quoted field' });
+    if (recoveryOffset !== undefined) {
+      const recovered = parseCsv(csv.slice(recoveryOffset), start);
+      rows.push(...recovered.rows); errors.push(...recovered.errors);
+    }
+  }
   else if (cells.length || cell.length || state === 'after') finish();
   return { rows, errors };
 }
@@ -99,3 +106,4 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
   parsed.errors.sort((a, b) => a.row - b.row);
   return { items, errors: parsed.errors };
 }
+

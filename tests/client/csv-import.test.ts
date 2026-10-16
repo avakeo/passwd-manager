@@ -31,3 +31,9 @@ test('I-01 CSVの大きな1アイテムはエラーにして次の行を続け�
   assert.equal(result.errors.length, 1);
   assert.equal(result.items[0]!.item.title, 'OK');
 });
+
+test('I-02 閉じ忘れの引用符を報告し、次の物理行の正常な行を残す', () => {
+  const result = importCsvPreview('name,url,username,password\n"Broken,https://bad.example,u,p\nGood,https://good.example,u,p\n', 'chrome');
+  assert.deepEqual(result.errors.map((e) => e.row), [2]);
+  assert.deepEqual(result.items.map((x) => x.item.title), ['Good']);
+});
