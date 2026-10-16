@@ -9,6 +9,7 @@ import { CryptoError, decryptFailed } from './errors.ts';
 import {
   ALG_HPKE_BASE,
   FORMAT_V1,
+  GRANT_ENVELOPE_LENGTH,
   assertId,
   assertVersion,
   encodeGrantEnvelope,
@@ -156,8 +157,21 @@ export type OwnKey = {
 export type { GrantTrust };
 
 // 開く前に、設計案 4.3 の順で確かめる。1つでも違えば開かない。
+// サーバーから来たグラントの形を、ほかの確認より先に確かめる（DeepSeek #11）。
+// 長さの決まったバイト列が違う長さなら MALFORMED。長さの欄（2バイト）に収まらない値で署名する中身を組み立てない。
+function assertGrantShape(grant: Grant): void {
+  if (typeof grant !== 'object' || grant === null) throw new CryptoError('MALFORMED');
+  const { ephemeralPublicKey, wrappedKey, recipientKeyId, signerKeyId } = grant;
+  if (!(ephemeralPublicKey instanceof Uint8Array) || ephemeralPublicKey.length !== PUBLIC_KEY_LENGTH) throw new CryptoError('MALFORMED');
+  if (!(wrappedKey instanceof Uint8Array) || wrappedKey.length !== GRANT_ENVELOPE_LENGTH) throw new CryptoError('MALFORMED');
+  if (typeof recipientKeyId !== 'string' || typeof signerKeyId !== 'string') throw new CryptoError('MALFORMED');
+  assertVersion(grant.vaultKeyVersion);
+}
+
 // currentVaultKeyVersion は、サーバーが /v1/vault で「今の世代」として返した値。
 async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<void> {
+  // 0. 形と長さ
+  assertGrantShape(grant);
   // 1. 管理者の署名用公開鍵を固定し、最後に見た世代も初期化してある（未設定なら、固定していないのと同じ扱い）
   const { signer, lastSeen } = await pinnedSignerAndGeneration(trust);
   // 2. 署名者の鍵ID が、固定した鍵ID と一致する

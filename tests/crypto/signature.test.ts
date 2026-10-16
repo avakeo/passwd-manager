@@ -393,3 +393,56 @@ test('C-24 サーバーが返す今の世代とグラントの世代が食い違
   await openGrant(cOwn(), trust, grant, 5);
   assert.equal(await trust.generations.get(), 5);
 });
+
+// DeepSeek #11：サーバーは enc や wrapped_key に長さの制限のないバイト列を入れられる。
+// 署名する中身の長さの欄（2バイト）に収まらない長さだと、以前は CryptoError でない RangeError が出ていた。
+test('C-10 グラントの使い捨て公開鍵と包んだ Vault 鍵の長さが違えば、署名の確認より先に形式の不正として拒否する（DeepSeek #11）', async () => {
+  const grant = await grantToC(adminSigner, 1);
+  const bytes = (n: number) => new Uint8Array(n).fill(0x04);
+  const cases: [string, Grant][] = [
+    ['enc が 0 バイト', { ...grant, ephemeralPublicKey: bytes(0) }],
+    ['enc が 64 バイト', { ...grant, ephemeralPublicKey: grant.ephemeralPublicKey.slice(0, 64) }],
+    ['enc が 66 バイト', { ...grant, ephemeralPublicKey: concat(grant.ephemeralPublicKey, bytes(1)) }],
+    ['enc が 70000 バイト', { ...grant, ephemeralPublicKey: bytes(70000) }],
+    ['wrapped_key が 0 バイト', { ...grant, wrappedKey: bytes(0) }],
+    ['wrapped_key が 49 バイト', { ...grant, wrappedKey: grant.wrappedKey.slice(0, 49) }],
+    ['wrapped_key が 51 バイト', { ...grant, wrappedKey: concat(grant.wrappedKey, bytes(1)) }],
+    ['wrapped_key が 70000 バイト', { ...grant, wrappedKey: concat(grant.wrappedKey.slice(0, 2), bytes(69998)) }],
+  ];
+  for (const [name, g] of cases) {
+    await assert.rejects(openGrant(cOwn(), await trusted(), ...served(g)), isCode('MALFORMED'), name);
+  }
+  // 固定がない端末でも、形の不正が先に分かる（署名の確認に進まない）
+  await assert.rejects(openGrant(cOwn(), newTrust(C_ID), ...served(cases[3]![1])), isCode('MALFORMED'));
+});
+
+test('C-25 どんな形のグラントを渡しても、暗号コアの決めたエラー（CryptoError）以外を投げない（DeepSeek #11）', async () => {
+  const grant = await grantToC(adminSigner, 1);
+  const rnd = (max: number) => crypto.getRandomValues(new Uint8Array(Math.floor(Math.random() * max)));
+  const odd: unknown[] = [undefined, null, 0, -1, 1.5, NaN, Infinity, '1', 'key|x', '', {}, [], new Uint8Array(0), new Uint8Array(70000), 2 ** 53];
+  const fields = ['vaultKeyVersion', 'recipientKeyId', 'ephemeralPublicKey', 'wrappedKey', 'signerKeyId', 'signature'] as const;
+  const variants: unknown[] = [null, undefined, 'grant', 1, {}];
+  for (const f of fields) {
+    for (const v of odd) variants.push({ ...grant, [f]: v });
+    for (let i = 0; i < 20; i++) variants.push({ ...grant, [f]: rnd(f === 'ephemeralPublicKey' ? 130 : 200) });
+  }
+  // 長さは正しく、中身だけがでたらめなもの
+  for (let i = 0; i < 20; i++) {
+    variants.push({ ...grant, ephemeralPublicKey: rnd(1).length === 0 ? crypto.getRandomValues(new Uint8Array(65)) : concat(new Uint8Array([4]), crypto.getRandomValues(new Uint8Array(64))) });
+    variants.push({ ...grant, wrappedKey: concat(new Uint8Array([1, 2]), crypto.getRandomValues(new Uint8Array(48))) });
+    variants.push({ ...grant, signature: concat(new Uint8Array([1, 3]), crypto.getRandomValues(new Uint8Array(64))) });
+  }
+  for (const g of variants) {
+    for (const current of [1, 0, -1, NaN, '1' as unknown as number, 2 ** 60]) {
+      for (const open of [openGrant, openGrantForAdmin] as const) {
+        try {
+          await open(cOwn(), await trusted(), g as Grant, current);
+          assert.fail(`開けてはいけない：${JSON.stringify(g, (_k, v) => (v instanceof Uint8Array ? `${v.length}B` : v))}`);
+        } catch (e) {
+          if (e instanceof assert.AssertionError) throw e;
+          assert.ok(e instanceof CryptoError, `CryptoError 以外が出た：${String(e)}`);
+        }
+      }
+    }
+  }
+});

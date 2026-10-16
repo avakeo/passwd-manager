@@ -14,6 +14,8 @@ export const ALG_ECDSA_P256_SHA256 = 0x03; // 署名は64バイト（r と s を
 export const NONCE_LENGTH = 12;
 export const TAG_LENGTH = 16;
 export const SIGNATURE_LENGTH = 64;
+// グラントの wrapped_key の長さ：形式1 ＋ アルゴリズムID1 ＋ Vault 鍵32 ＋ 認証タグ16
+export const GRANT_ENVELOPE_LENGTH = 2 + 32 + TAG_LENGTH;
 
 export type AeadUsage = 'item' | 'member-key' | 'admin-sign-key';
 

@@ -23,6 +23,7 @@ declare module 'node:assert/strict' {
     ): Promise<void>;
     doesNotReject(promiseOrFn: Promise<unknown> | (() => Promise<unknown>), message?: string): Promise<void>;
     fail(message?: string): never;
+    AssertionError: new (options: { message?: string }) => Error;
   }
   const assert: Assert;
   export default assert;
