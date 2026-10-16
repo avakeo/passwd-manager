@@ -22,9 +22,8 @@ import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.
 import { ALG_ECDSA_P256_SHA256, FORMAT_V1 } from '../../src/crypto/format.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { newTrust } from '../helpers/trust.ts';
 import {
-  MemoryGenerationStore,
-  MemorySignerPinStore,
   assertSignerPinned,
   importSignPublicKey,
   pinSigner,
@@ -67,9 +66,9 @@ function adminOwn(): OwnKey {
 
 // 照合を済ませた端末の信頼の状態（管理者の署名鍵を固定、最後に見た世代はまだない）
 async function trusted(): Promise<GrantTrust> {
-  const signerPins = new MemorySignerPinStore();
-  await pinSigner(signerPins, adminPin);
-  return { signerPins, generations: new MemoryGenerationStore() };
+  const t = newTrust(C_ID);
+  await pinSigner(t, adminPin);
+  return t;
 }
 
 function grantToC(signer: GrantSigner, vaultKeyVersion: number, vaultKeyRaw = generateVaultKeyRaw()) {
@@ -253,9 +252,8 @@ test('C-23 管理者自身宛てのグラントを別の鍵で署名したもの
   });
   // 管理者の端末を初期化した後：ロック解除できた自分の行の署名用公開鍵を、自分の固定値として入れ直す
   const unlocked = await unlockAdminKey(ADMIN_PASSWORD, admin.record);
-  const signerPins = new MemorySignerPinStore();
-  await pinSigner(signerPins, adminPin);
-  const trust = { signerPins, generations: new MemoryGenerationStore() };
+  const trust = newTrust(ADMIN_ID);
+  await pinSigner(trust, adminPin);
   const adminOwnUnlocked = { ...adminOwn(), privateKey: unlocked.privateKey };
   await assert.rejects(openGrantForAdmin(adminOwnUnlocked, trust, evil), isCode('SIGNATURE_INVALID'));
   await assert.rejects(openGrant(adminOwnUnlocked, trust, evil), isCode('SIGNATURE_INVALID'));
@@ -279,11 +277,11 @@ test('C-23 管理者自身宛てのグラントを別の鍵で署名したもの
 
 test('P-04 管理者の署名用公開鍵を固定する前は、本物のグラントでも開かず、照合を求める', async () => {
   const grant = await grantToC(adminSigner, 1);
-  const trust = { signerPins: new MemorySignerPinStore(), generations: new MemoryGenerationStore() };
+  const trust = newTrust(C_ID);
   await assert.rejects(openGrant(cOwn(), trust, grant), isCode('SIGNER_NOT_PINNED'));
   await assert.rejects(openGrantForAdmin(cOwn(), trust, grant), isCode('SIGNER_NOT_PINNED'));
   // 照合して固定すれば開ける
-  await pinSigner(trust.signerPins, adminPin);
+  await pinSigner(trust, adminPin);
   await openGrant(cOwn(), trust, grant);
 });
 
@@ -291,20 +289,20 @@ test('P-05 固定した後に、サーバーが管理者の署名用公開鍵か
   const trust = await trusted();
   // サーバーが /v1/me で返す管理者の鍵が、固定と違う
   await assert.rejects(
-    assertSignerPinned(trust.signerPins, { ...adminPin, publicKey: attacker.record.signPublicKey }),
+    assertSignerPinned(trust, { ...adminPin, publicKey: attacker.record.signPublicKey }),
     isCode('SIGNER_MISMATCH'),
   );
-  await assert.rejects(assertSignerPinned(trust.signerPins, { ...adminPin, keyId: 'key_attacker' }), isCode('SIGNER_MISMATCH'));
-  await assert.rejects(assertSignerPinned(trust.signerPins, { ...adminPin, memberId: 'member_attacker' }), isCode('SIGNER_MISMATCH'));
-  await assertSignerPinned(trust.signerPins, { ...adminPin, publicKey: adminPin.publicKey.slice() });
-  await assert.rejects(assertSignerPinned(new MemorySignerPinStore(), adminPin), isCode('SIGNER_NOT_PINNED'));
+  await assert.rejects(assertSignerPinned(trust, { ...adminPin, keyId: 'key_attacker' }), isCode('SIGNER_MISMATCH'));
+  await assert.rejects(assertSignerPinned(trust, { ...adminPin, memberId: 'member_attacker' }), isCode('SIGNER_MISMATCH'));
+  await assertSignerPinned(trust, { ...adminPin, publicKey: adminPin.publicKey.slice() });
+  await assert.rejects(assertSignerPinned(newTrust(C_ID), adminPin), isCode('SIGNER_NOT_PINNED'));
 
   // 攻撃者の鍵ID を名乗る、攻撃者の鍵で署名したグラント：鍵ID の時点で止まる
   const evil = await grantToC({ ...attackerSigner, keyId: attacker.record.keyId }, 1);
   await assert.rejects(openGrant(cOwn(), trust, evil), isCode('SIGNER_MISMATCH'));
   // 固定した後で呼び出し側の配列を書き換えても、固定値は変わらない
   const pin = { ...adminPin, publicKey: adminPin.publicKey.slice() };
-  const store = new MemorySignerPinStore();
+  const store = newTrust(C_ID);
   await pinSigner(store, pin);
   pin.publicKey[10]! ^= 1;
   await assertSignerPinned(store, adminPin);
@@ -313,8 +311,8 @@ test('P-05 固定した後に、サーバーが管理者の署名用公開鍵か
 test('固定できる管理者の署名用公開鍵は、曲線上の点で、ID の形が正しいものだけ', async () => {
   const bad = admin.record.signPublicKey.slice();
   bad[64]! ^= 1;
-  await assert.rejects(pinSigner(new MemorySignerPinStore(), { ...adminPin, publicKey: bad }), isCode('INVALID_PUBLIC_KEY'));
-  await assert.rejects(pinSigner(new MemorySignerPinStore(), { ...adminPin, keyId: 'key|x' }), isCode('INVALID_INPUT'));
+  await assert.rejects(pinSigner(newTrust(C_ID), { ...adminPin, publicKey: bad }), isCode('INVALID_PUBLIC_KEY'));
+  await assert.rejects(pinSigner(newTrust(C_ID), { ...adminPin, keyId: 'key|x' }), isCode('INVALID_INPUT'));
 });
 
 // 署名する中身の既知解テスト。期待値は src を使わず、設計案 3.1 の並びをここで組み立てる。

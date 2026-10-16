@@ -19,7 +19,8 @@ import { ALG_HPKE_BASE, FORMAT_V1, encodeGrantEnvelope, encodeSignatureEnvelope 
 import { AEAD_AES_256_GCM, setupBaseSWithEphemeral } from '../../src/crypto/hpke-core.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
-import { MemoryGenerationStore, MemorySignerPinStore, pinSigner, signMessage } from '../../src/crypto/signer.ts';
+import { pinSigner, signMessage } from '../../src/crypto/signer.ts';
+import { newTrust } from '../helpers/trust.ts';
 
 const ADMIN_PASSWORD = 'admin-hoshi-sora-umi-42';
 const C_PASSWORD = 'c-san-kawa-mori-yama-18';
@@ -60,9 +61,9 @@ const signer: GrantSigner = { memberId: 'member_admin', keyId: admin.record.keyI
 
 // 各メンバーの端末：管理者の署名鍵を照合して固定済み
 async function trust(): Promise<GrantTrust> {
-  const signerPins = new MemorySignerPinStore();
-  await pinSigner(signerPins, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
-  return { signerPins, generations: new MemoryGenerationStore() };
+  const t = newTrust();
+  await pinSigner(t, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
+  return t;
 }
 
 function grantFor(m: Member, vaultKeyVersion: number, vaultKeyRaw: Uint8Array<ArrayBuffer>) {

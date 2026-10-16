@@ -7,7 +7,8 @@ import { fromBase64Url, toBase64Url } from '../../src/crypto/bytes.ts';
 import { createAdminKey, createMemberKey, unlockMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../src/crypto/member-key.ts';
 import { createGrant, openGrant, type Grant, type GrantSigner } from '../../src/crypto/grant.ts';
 import { MemoryPinStore, fingerprint, pinPublicKey } from '../../src/crypto/public-key.ts';
-import { MemoryGenerationStore, MemorySignerPinStore, assertSignerPinned, pinSigner } from '../../src/crypto/signer.ts';
+import { assertSignerPinned, pinSigner } from '../../src/crypto/signer.ts';
+import { newTrust } from '../helpers/trust.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 import { decryptItem, encryptItem } from '../../src/crypto/item.ts';
 import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.ts';
@@ -101,8 +102,8 @@ async function approved() {
   const me = (await (await t.request('GET', '/v1/me', cSession.token)).json()) as MeResponse;
   const fromServer = signerFromApi(me.admin_signer!);
   assert.equal(await fingerprint(fromServer.publicKey), await fingerprint(adminKey.record.signPublicKey));
-  const cTrust = { signerPins: new MemorySignerPinStore(), generations: new MemoryGenerationStore() };
-  await pinSigner(cTrust.signerPins, fromServer);
+  const cTrust = newTrust(cSession.id);
+  await pinSigner(cTrust, fromServer);
 
   // 管理者の端末は、C さんの公開鍵を照合して固定する
   const pins = new MemoryPinStore();
@@ -127,7 +128,7 @@ async function cOpensFromApi(t: Setup, token: string, cTrust: Parameters<typeof 
     },
   });
   // サーバーが返す管理者の鍵が、固定と違っていれば止める（P-05）
-  await assertSignerPinned(cTrust.signerPins, signerFromApi(me.admin_signer!));
+  await assertSignerPinned(cTrust, signerFromApi(me.admin_signer!));
   return openGrant({ memberId: me.id, keyId: me.key.id, publicKey, privateKey: cPrivate }, cTrust, grantFromApi(vault.grant));
 }
 

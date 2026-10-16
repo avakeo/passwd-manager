@@ -4,7 +4,8 @@ import { concat, fromHex, toHex } from '../../src/crypto/bytes.ts';
 import { MemoryPinStore, assertPinned, fingerprint, pinPublicKey } from '../../src/crypto/public-key.ts';
 import { createGrant, openGrant, type GrantSigner } from '../../src/crypto/grant.ts';
 import { createAdminKey, createMemberKey } from '../../src/crypto/member-key.ts';
-import { MemoryGenerationStore, MemorySignerPinStore, pinSigner } from '../../src/crypto/signer.ts';
+import { pinSigner } from '../../src/crypto/signer.ts';
+import { newTrust } from '../helpers/trust.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 import { CryptoError } from '../../src/crypto/errors.ts';
 
@@ -98,11 +99,11 @@ test('P-01 承認済みメンバーの公開鍵をサーバー側で差し替え
     vaultKeyVersion: 2,
     vaultKeyRaw: generateVaultKeyRaw(),
   });
-  const signerPins = new MemorySignerPinStore();
-  await pinSigner(signerPins, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
+  const trust = newTrust('member_c');
+  await pinSigner(trust, { memberId: 'member_admin', keyId: admin.record.keyId, publicKey: admin.record.signPublicKey });
   await openGrant(
     { memberId: 'member_c', keyId: memberC.record.keyId, publicKey: memberC.record.publicKey, privateKey: memberC.privateKey },
-    { signerPins, generations: new MemoryGenerationStore() },
+    trust,
     ok,
   );
 });

@@ -18,7 +18,7 @@ import {
 } from './format.ts';
 import { openBase, sealBase } from './hpke.ts';
 import { PUBLIC_KEY_LENGTH, assertPinned, importPublicKey, type PinnedKey, type PinStore } from './public-key.ts';
-import { importSignPublicKey, signMessage, verifySignature, type GenerationStore, type SignerPinStore } from './signer.ts';
+import { importSignPublicKey, signMessage, verifySignature, type GrantTrust } from './signer.ts';
 import { VAULT_KEY_LENGTH, importVaultKey } from './vault-key.ts';
 
 const GRANT_INFO_LABEL = 'teampw/v1/vault-key-grant';
@@ -145,11 +145,8 @@ export type OwnKey = {
   privateKey: CryptoKey; // ロック解除済み、取り出し不可
 };
 
-// 端末の信頼の状態：固定した管理者の署名用公開鍵と、最後に見た世代
-export type GrantTrust = {
-  signerPins: SignerPinStore;
-  generations: GenerationStore;
-};
+// 端末の信頼の状態（固定した管理者の署名用公開鍵と、最後に見た世代）。接続先とメンバーの組ごとに signer.ts の openTrust で作る。
+export type { GrantTrust };
 
 // 開く前に、設計案 4.3 の順で確かめる。1つでも違えば開かない。
 async function verifyGrant(own: OwnKey, trust: GrantTrust, grant: Grant): Promise<void> {

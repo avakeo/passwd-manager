@@ -1,7 +1,7 @@
 // 管理者署名の検証側：管理者の署名用公開鍵の固定、最後に見た世代の記録、ECDSA の署名と検証。
 // 仕様書「暗号仕様 > 管理者の署名鍵ペア」、docs/設計案_グラントの送り手認証.md の4章。
 
-import { equalBytes, type Bytes } from './bytes.ts';
+import { equalBytes, fromBase64Url, toBase64Url, type Bytes } from './bytes.ts';
 import { CryptoError } from './errors.ts';
 import { SIGNATURE_LENGTH, assertId, assertVersion } from './format.ts';
 import { PUBLIC_KEY_LENGTH } from './public-key.ts';
@@ -46,40 +46,123 @@ export type SignerPin = {
   publicKey: Bytes;
 };
 
-// 管理者は1人なので、固定するのは1組だけ。提出版と同じくインターフェースだけを置き、拡張機能で chrome.storage.local に差し替える。
+// 管理者は1人なので、1つの組（接続先とメンバー）に固定するのは1組だけ。
 export interface SignerPinStore {
   get(): Promise<SignerPin | undefined>;
   set(pin: SignerPin): Promise<void>;
+}
+
+// 端末が最後に見た Vault 鍵の世代。これより古い世代のグラントは受け付けない（C-20）。
+export interface GenerationStore {
+  get(): Promise<number | undefined>;
+  set(vaultKeyVersion: number): Promise<void>;
+}
+
+// 端末の信頼の状態：固定した管理者の署名用公開鍵と、最後に見た世代
+export type GrantTrust = {
+  signerPins: SignerPinStore;
+  generations: GenerationStore;
+};
+
+// 端末の保存先（拡張機能では chrome.storage.local）。キーと文字列の値だけを扱う。
+export interface TrustStorage {
+  get(key: string): Promise<string | undefined>;
+  set(key: string, value: string): Promise<void>;
+}
+
+export class MemoryTrustStorage implements TrustStorage {
+  readonly #values = new Map<string, string>();
+
+  async get(key: string): Promise<string | undefined> {
+    return this.#values.get(key);
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    this.#values.set(key, value);
+  }
+}
+
+// 信頼の状態を分ける単位。API の接続先とメンバー ID の組ごとに、別の固定と世代を持つ（P-09）。
+// 同じブラウザのプロファイルを別のメンバーが使っても、前のメンバーの値は効かない。
+export type TrustScope = {
+  apiOrigin: string; // https のオリジン（例 https://pw-api.example.com）
+  memberId: string;
+};
+
+function assertApiOrigin(apiOrigin: string): void {
+  let url: URL;
+  try {
+    url = new URL(apiOrigin);
+  } catch {
+    throw new CryptoError('INVALID_INPUT');
+  }
+  // パスや区切り文字を含まない、https のオリジンそのものだけ
+  if (url.protocol !== 'https:' || url.origin !== apiOrigin || apiOrigin.includes('|')) throw new CryptoError('INVALID_INPUT');
+}
+
+function trustKey(scope: TrustScope, name: 'signer' | 'generation'): string {
+  return `teampw/v1/trust|${scope.apiOrigin}|${scope.memberId}|${name}`;
 }
 
 function copyPin(pin: SignerPin): SignerPin {
   return { memberId: pin.memberId, keyId: pin.keyId, publicKey: pin.publicKey.slice() };
 }
 
-export class MemorySignerPinStore implements SignerPinStore {
-  #pin: SignerPin | undefined;
-
-  async get(): Promise<SignerPin | undefined> {
-    return this.#pin && copyPin(this.#pin);
+// 保存した値は端末の中のものだが、形が崩れていれば使わない（固定がないのと同じ扱い）
+function parsePin(value: string | undefined): SignerPin | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const v = JSON.parse(value) as { memberId: string; keyId: string; publicKey: string };
+    assertId(v.memberId);
+    assertId(v.keyId);
+    const publicKey = fromBase64Url(v.publicKey);
+    if (publicKey.length !== PUBLIC_KEY_LENGTH) return undefined;
+    return { memberId: v.memberId, keyId: v.keyId, publicKey };
+  } catch {
+    return undefined;
   }
+}
 
-  async set(pin: SignerPin): Promise<void> {
-    this.#pin = copyPin(pin);
-  }
+function parseVersion(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 1 ? n : undefined;
+}
+
+export function openTrust(storage: TrustStorage, scope: TrustScope): GrantTrust {
+  assertApiOrigin(scope.apiOrigin);
+  assertId(scope.memberId);
+  const s = { apiOrigin: scope.apiOrigin, memberId: scope.memberId };
+  return {
+    signerPins: {
+      get: async () => parsePin(await storage.get(trustKey(s, 'signer'))),
+      set: async (pin) => {
+        const p = copyPin(pin);
+        await storage.set(trustKey(s, 'signer'), JSON.stringify({ memberId: p.memberId, keyId: p.keyId, publicKey: toBase64Url(p.publicKey) }));
+      },
+    },
+    generations: {
+      get: async () => parseVersion(await storage.get(trustKey(s, 'generation'))),
+      set: async (vaultKeyVersion) => {
+        assertVersion(vaultKeyVersion);
+        await storage.set(trustKey(s, 'generation'), String(vaultKeyVersion));
+      },
+    },
+  };
 }
 
 // 承認のとき、Discord 以外の経路で管理者の画面と見比べて一致した組だけを固定する。
 // 管理者自身の端末は、ロック解除できた自分の行の値を固定する（AAD に公開鍵の SHA-256 が入っているので、差し替えた行は開けない）。
-export async function pinSigner(store: SignerPinStore, pin: SignerPin): Promise<void> {
+export async function pinSigner(trust: GrantTrust, pin: SignerPin): Promise<void> {
   assertId(pin.memberId);
   assertId(pin.keyId);
   await importSignPublicKey(pin.publicKey);
-  await store.set(copyPin(pin));
+  await trust.signerPins.set(copyPin(pin));
 }
 
 // サーバーが返した管理者の組が、固定した組と一致するかを確かめる（P-05）。公開鍵は65バイトそのもので比べる。
-export async function assertSignerPinned(store: SignerPinStore, fromServer: SignerPin): Promise<SignerPin> {
-  const pinned = await store.get();
+export async function assertSignerPinned(trust: GrantTrust, fromServer: SignerPin): Promise<SignerPin> {
+  const pinned = await trust.signerPins.get();
   if (pinned === undefined) throw new CryptoError('SIGNER_NOT_PINNED');
   if (
     pinned.memberId !== fromServer.memberId ||
@@ -89,24 +172,4 @@ export async function assertSignerPinned(store: SignerPinStore, fromServer: Sign
     throw new CryptoError('SIGNER_MISMATCH');
   }
   return pinned;
-}
-
-// 端末が最後に見た Vault 鍵の世代。これより古い世代のグラントは受け付けない（C-20）。
-// 拡張機能で chrome.storage.local に差し替える。
-export interface GenerationStore {
-  get(): Promise<number | undefined>;
-  set(vaultKeyVersion: number): Promise<void>;
-}
-
-export class MemoryGenerationStore implements GenerationStore {
-  #version: number | undefined;
-
-  async get(): Promise<number | undefined> {
-    return this.#version;
-  }
-
-  async set(vaultKeyVersion: number): Promise<void> {
-    assertVersion(vaultKeyVersion);
-    this.#version = vaultKeyVersion;
-  }
 }
