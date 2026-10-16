@@ -462,3 +462,51 @@ test('C-10 グラントの行の format_version が知らない値なら、開�
   }
   await openGrant(cOwn(), await trusted(), ...served(grant));
 });
+
+// Codex #3（一部）：署名などの確認に失敗したら、HPKE で開く処理（自分の秘密鍵を使う処理）に進まない。
+// 秘密鍵を読み出したかどうかを、OwnKey の getter で数える。開く処理だけが own.privateKey を読む。
+test('C-18 署名などの確認に失敗したときは、HPKE で開く処理が呼ばれない（Codex #3）', async () => {
+  const watched = () => {
+    const box = { reads: 0 };
+    const own: OwnKey = {
+      memberId: C_ID,
+      keyId: memberC.record.keyId,
+      publicKey: memberC.record.publicKey,
+      get privateKey() {
+        box.reads += 1;
+        return memberC.privateKey;
+      },
+    };
+    return { own, box };
+  };
+  const grant = await grantToC(adminSigner, 1);
+  const evil = await createGrant({
+    pins,
+    signer: attackerSigner,
+    memberId: C_ID,
+    recipient: { keyId: memberC.record.keyId, publicKey: memberC.record.publicKey },
+    vaultKeyVersion: 1,
+    vaultKeyRaw: generateVaultKeyRaw(),
+  });
+  const broken = grant.signature.slice();
+  broken[20]! ^= 1;
+  const failures: [string, Grant, number, GrantTrust | undefined, string][] = [
+    ['別の鍵の署名', evil, 1, undefined, 'SIGNATURE_INVALID'],
+    ['署名の改ざん', { ...grant, signature: broken }, 1, undefined, 'SIGNATURE_INVALID'],
+    ['署名なし', { ...grant, signature: new Uint8Array(0) }, 1, undefined, 'SIGNATURE_INVALID'],
+    ['固定なし', grant, 1, newTrust(C_ID), 'SIGNER_NOT_PINNED'],
+    ['今の世代と食い違う', grant, 2, undefined, 'GENERATION_MISMATCH'],
+    ['形の不正', { ...grant, wrappedKey: grant.wrappedKey.slice(0, 10) }, 1, undefined, 'MALFORMED'],
+  ];
+  for (const [name, g, current, trust, code] of failures) {
+    for (const open of [openGrant, openGrantForAdmin] as const) {
+      const { own, box } = watched();
+      await assert.rejects(open(own, trust ?? (await trusted()), g, current), isCode(code), name);
+      assert.equal(box.reads, 0, `${name}：HPKE で開く処理に進んだ`);
+    }
+  }
+  // 確認が通れば、開く処理で秘密鍵を使う（数え方が正しいことの確認）
+  const { own, box } = watched();
+  await openGrant(own, await trusted(), ...served(grant));
+  assert.ok(box.reads >= 1);
+});
