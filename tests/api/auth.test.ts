@@ -574,6 +574,40 @@ test('TOTP の作り直し：今のコードを確かめてから新しいシー
   assert.notEqual(t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s, null);
 });
 
+test('TOTP の作り直しは、認証アプリをなくした人のために、回復コードを1つ使っても始められる（使ったコードは消える）', async () => {
+  const t = setup();
+  const userId = newDiscordUser();
+  const m = await t.addMember('active', { discordUserId: userId, totpSecret: null });
+  const { recoveryCodes } = await registerTotp(t, m.token);
+  const r = await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] });
+  assert.equal(r.status, 200);
+  const next = base32ToBytes(((await r.json()) as { secret: string }).secret);
+  // 使った回復コードは消える（もう一度は使えない）
+  const hashes = JSON.parse(String(t.db.db.prepare('SELECT recovery_code_hashes AS h FROM members WHERE id = ?').get(m.id)!.h)) as string[];
+  assert.equal(hashes.length, 9);
+  assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] })).status, 403);
+  // 新しいシークレットで確定でき、回復コードも新しくなる
+  mock.timers.setTime(T0 + 30_000);
+  const ok = await t.request('POST', '/v1/me/totp/confirm', m.token, { code: referenceTotp(next, stepAt(T0 + 30_000)) });
+  assert.equal(ok.status, 200);
+  const fresh = ((await ok.json()) as { recovery_codes: string[] }).recovery_codes;
+  assert.equal(fresh.length, 10);
+  mock.timers.setTime(T0 + 60_000);
+  assert.equal((await totpLogin(t, userId, referenceTotp(next, stepAt(T0 + 60_000)))).res.status, 200);
+  // コードと回復コードを両方付けるのは 400
+  assert.equal((await t.request('POST', '/v1/me/totp', m.token, { code: '000000', recovery_code: fresh[0] })).status, 400);
+});
+
+test('A-08 TOTP の作り直しで回復コードを間違えても、TOTP と同じように5回で 429 になる', async () => {
+  const t = setup();
+  const m = await t.addMember('active', { totpSecret: null });
+  const { recoveryCodes } = await registerTotp(t, m.token);
+  for (let i = 0; i < 5; i++) assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: 'AAAA-AAAA-AAAA-AAAA' })).status, 403, `${i + 1}回目`);
+  assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] })).status, 429);
+  // 正しい回復コードも確かめずに断るので、消えていない
+  assert.equal((JSON.parse(String(t.db.db.prepare('SELECT recovery_code_hashes AS h FROM members WHERE id = ?').get(m.id)!.h)) as string[]).length, 10);
+});
+
 for (const role of ['admin', 'member'] as const) {
   test(`A-11 TOTP を登録していない${role === 'admin' ? '管理者' : 'メンバー'}は、ログインで登録を求められ、登録するまで管理操作も読み書きもできない`, async () => {
     const t = setup();

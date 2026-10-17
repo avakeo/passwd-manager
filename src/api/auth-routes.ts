@@ -225,15 +225,17 @@ export function registerAuthRoutes(app: Hono<Env>): void {
   });
 
   // TOTP の登録の開始。シークレットは、コードで確定するまで登録途中の列に置く。
-  // 登録済みなら作り直し：今のコードを確かめてから始める。確定するまでは今のシークレットのまま
+  // 登録済みなら作り直し：今のコードか回復コードを確かめてから始める。確定するまでは今のシークレットのまま
   app.post('/v1/me/totp', async (c) => {
     const p = c.get('principal');
     const db = c.env.DB;
     const m = await db.prepare('SELECT display_name, totp_secret_encrypted AS s FROM members WHERE id = ?').bind(p.memberId).first<{ display_name: string; s: string | null }>();
     if (!m) throw new HttpProblem(404);
     if (m.s !== null) {
-      const body = await readJson(c.req.raw, ['code']);
-      if ((await checkMemberCode(c.env, p.memberId, body.code)) !== true) throw new HttpProblem(403);
+      // 認証アプリをなくした人のために、回復コードでも始められる（使ったコードは消える。試行は同じように数える）
+      const body = await readJsonOneOf(c.req.raw, [['code'], ['recovery_code']]);
+      const ok = 'code' in body ? await checkMemberCode(c.env, p.memberId, body.code) : await checkRecoveryCode(db, p.memberId, body.recovery_code);
+      if (ok !== true) throw new HttpProblem(403);
     }
     const secret = newTotpSecret();
     try {
