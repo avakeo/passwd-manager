@@ -142,6 +142,7 @@ for (const row of ROWS) {
           role: state === '管理者' || state === 'TOTP 未登録（管理者）' ? 'admin' : 'member',
           scope: state === 'Web 用（メンバー）' ? 'web' : 'extension',
           totpSecret: registered ? DEFAULT_TOTP_SECRET : null,
+          totpVerifiedAt: T0, // 自分の別のセッションの無効化には、5分以内の TOTP の確認が要る（A-15）
         });
         token = m.token;
         const other = await t.addSession(m.id, { scope: state === 'Web 用（メンバー）' ? 'web' : 'extension' });

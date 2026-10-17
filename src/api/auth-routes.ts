@@ -5,7 +5,7 @@
 // トークンは乱数32バイト。D1 には SHA-256 だけを置き、応答で一度だけ生の値を返す。ログは出さない。
 
 import type { Hono } from 'hono';
-import { sha256Hex } from './auth.ts';
+import { requireRecentTotp, sha256Hex } from './auth.ts';
 import type { D1Database } from './d1.ts';
 import { exchangeCodeForUser, hasTeamRole } from './discord.ts';
 import type { Bindings, Env } from './env.ts';
@@ -215,9 +215,11 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     return c.json({ sessions: await listSessions(c.env.DB, p.memberId, p.sessionId) });
   });
 
-  // 他人のセッションは、あってもなくても同じ 404（Z-03）
+  // 他人のセッションは、あってもなくても同じ 404（Z-03）。
+  // 盗まれたトークンで持ち主の別の端末を締め出せないように、直近5分以内に TOTP を確かめたセッションだけができる（A-15）
   app.delete('/v1/me/sessions/:id', async (c) => {
     const p = c.get('principal');
+    requireRecentTotp(p, Date.now());
     if (!(await revokeOwnSession(c.env.DB, p.memberId, c.req.param('id')))) throw new HttpProblem(404);
     return c.body(null, 204);
   });

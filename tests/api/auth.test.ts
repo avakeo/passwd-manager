@@ -329,7 +329,7 @@ test('A-07 ログアウトした後は、アクセストークンもリフレッ
 
 test('Z-03 他人のセッションは一覧に出ず、無効化しようとしても 404。自分の別のセッションは無効化できる', async () => {
   const t = setup();
-  const a = await t.addMember('active');
+  const a = await t.addMember('active', { totpVerifiedAt: T0 }); // 無効化には5分以内の TOTP の確認が要る（A-15）
   const aOther = await t.addSession(a.id);
   const b = await t.addMember('active');
   const list = (await (await t.request('GET', '/v1/me/sessions', a.token)).json()) as { sessions: Record<string, unknown>[] };
@@ -343,6 +343,22 @@ test('Z-03 他人のセッションは一覧に出ず、無効化しようとし
   // 自分の別のセッションは無効化できる
   assert.equal((await t.request('DELETE', `/v1/me/sessions/${aOther.sessionId}`, a.token)).status, 204);
   assert.equal((await t.request('GET', '/v1/me/sessions', aOther.token)).status, 401);
+});
+
+test('A-15 自分の別のセッションの無効化は、直近5分以内に TOTP を確かめたセッションだけができる', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  const victim = await t.addSession(m.id);
+  // 一度も確かめていないセッション（盗まれたトークンを想定）
+  assert.equal((await t.request('DELETE', `/v1/me/sessions/${victim.sessionId}`, m.token)).status, 403);
+  // 5分より前に確かめたセッション
+  const old = await t.addSession(m.id, { totpVerifiedAt: T0 - 5 * 60 * 1000 - 1 });
+  assert.equal((await t.request('DELETE', `/v1/me/sessions/${victim.sessionId}`, old.token)).status, 403);
+  assert.equal((await t.request('GET', '/v1/me/sessions', victim.token)).status, 200, '無効になっていない');
+  // 再確認（ステップアップ）すれば無効化できる
+  assert.equal((await t.request('POST', '/v1/auth/totp', m.token, { code: referenceTotp(m.secret, stepAt(T0)) })).status, 204);
+  assert.equal((await t.request('DELETE', `/v1/me/sessions/${victim.sessionId}`, m.token)).status, 204);
+  assert.equal((await t.request('GET', '/v1/me/sessions', victim.token)).status, 401);
 });
 
 // ---- TOTP ----

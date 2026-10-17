@@ -91,6 +91,7 @@ export function authorize(p: Principal, method: string, path: string): void {
 
 // 管理操作の直前の TOTP の再確認（ステップアップ）。5分以内に確かめたセッションだけを通す（A-10）。
 // 管理操作のエンドポイント（承認、削除、ロール変更、ローテーション）はフェーズ4で作り、この判定を通す。
+// 自分の別のセッションの無効化も、この判定を通す（A-15）。
 export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
 export function requireRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): void {
