@@ -240,6 +240,32 @@ test('P-11 別の鍵宛てのグラントが1つでもあれば、最初の Vaul
   assert.equal(count(t, 'SELECT COUNT(*) AS n FROM rotation_guard'), 0);
 });
 
+test('DeepSeek #2 最初の Vault は、サーバーもグラントの署名を確かめる。偽の署名・別の鍵の署名・曲線上にない使い捨て公開鍵は 400 で、何も保存しない', async () => {
+  const t = setup();
+  const admin = await registeredAdmin(t);
+  const real = grantBody(await adminSelfGrant(admin.id));
+  // 形だけ合わせた偽物（長さと先頭のバイトは正しい）
+  const forgedSignature = new Uint8Array(66);
+  forgedSignature.set([0x01, 0x03]);
+  forgedSignature.fill(7, 2);
+  const offCurve = new Uint8Array(65).fill(1);
+  offCurve[0] = 0x04;
+  // 別の管理者の鍵で署名したグラント（鍵 ID だけ、登録済みの鍵に合わせる）
+  const other = await adminSelfGrant(admin.id, adminKey2);
+  const otherSigned = { ...grantBody(other), recipient_key_id: adminKey.record.keyId, signer_key_id: adminKey.record.keyId };
+  const cases: [string, Record<string, unknown>][] = [
+    ['偽の署名', { ...real, signature: toBase64Url(forgedSignature) }],
+    ['曲線上にない使い捨て公開鍵', { ...real, ephemeral_public_key: toBase64Url(offCurve) }],
+    ['署名した後に包んだ鍵を差し替えた', { ...real, wrapped_key: grantBody(await adminSelfGrant(admin.id)).wrapped_key }],
+    ['別の鍵の署名', otherSigned],
+  ];
+  for (const [name, body] of cases) assert.equal((await t.request('POST', '/v1/vault/init', admin.token, body)).status, 400, name);
+  assert.equal(count(t, 'SELECT COUNT(*) AS n FROM vault_key_grants'), 0, '何も保存しない');
+  assert.equal(count(t, 'SELECT COUNT(*) AS n FROM vault_meta'), 1, 'テストの準備の行だけ');
+  // 本物なら通る
+  assert.equal((await t.request('POST', '/v1/vault/init', admin.token, real)).status, 201);
+});
+
 test('P-11 最初の Vault は、宛先と署名が管理者自身の有効な鍵で、世代1のときだけ。形の違いは 400', async () => {
   const t = setup();
   const admin = await registeredAdmin(t);

@@ -6,7 +6,10 @@ import { hasRecentTotp } from './auth.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
 import { HttpProblem } from './problem.ts';
-import { fromBase64Url } from '../crypto/bytes.ts';
+import { fromBase64Url, type Bytes } from '../crypto/bytes.ts';
+import { grantSignedMessage } from '../crypto/grant.ts';
+import { importPublicKey } from '../crypto/public-key.ts';
+import { importSignPublicKey, verifySignature } from '../crypto/signer.ts';
 import { ALG_AES_256_GCM, ALG_ECDSA_P256_SHA256, ALG_HPKE_BASE, FORMAT_V1, GRANT_ENVELOPE_LENGTH, NONCE_LENGTH, SIGNATURE_LENGTH, TAG_LENGTH } from '../crypto/format.ts';
 import { KDF_PBKDF2_SHA256, PASSWORD_NORMALIZATION, PBKDF2_MAX_ITERATIONS, PBKDF2_MIN_ITERATIONS, SALT_LENGTH } from '../crypto/kdf.ts';
 
@@ -15,7 +18,7 @@ const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const PUBLIC_KEY_LENGTH = 65; // P-256 の非圧縮形式
 const MAX_WRAPPED_PRIVATE_KEY = 512; // PKCS#8 の P-256 秘密鍵（約140バイト）を包んだもの。余裕を持たせた上限
 
-function bytes(v: unknown, maxLength = 1024): Uint8Array {
+function bytes(v: unknown, maxLength = 1024): Bytes {
   if (typeof v !== 'string' || !BASE64URL.test(v) || v.length % 4 === 1 || v.length > Math.ceil((maxLength * 4) / 3)) throw new HttpProblem(400);
   return fromBase64Url(v);
 }
@@ -138,6 +141,36 @@ export function registerKeyRoutes(app: Hono<Env>): void {
     if (sig.length !== 2 + SIGNATURE_LENGTH || sig[0] !== FORMAT_V1 || sig[1] !== ALG_ECDSA_P256_SHA256) throw new HttpProblem(400);
 
     const db = c.env.DB;
+    // サーバーも署名を確かめる（形だけ合わせた偽のグラントで Vault を作らせ、正規の端末が開けないまま
+    // 作り直せなくなるのを防ぐ：DeepSeek #2）。署名する中身は、暗号コアと同じ関数で組み立てる
+    const own = await db
+      .prepare(
+        `SELECT k.ecdh_public_key, k.ecdsa_public_key FROM member_keys k JOIN members m ON m.id = k.member_id
+          WHERE k.id = ? AND m.id = ? AND m.role = 'admin' AND m.status = 'active' AND k.status = 'active' AND k.ecdsa_public_key IS NOT NULL`,
+      )
+      .bind(recipient, p.memberId)
+      .first<{ ecdh_public_key: string; ecdsa_public_key: string }>();
+    if (!own) throw new HttpProblem(409); // 自分の有効な署名鍵付きの鍵ではない
+    const epkBytes = fromBase64Url(epk);
+    try {
+      await importPublicKey(epkBytes); // 曲線上の点か
+    } catch {
+      throw new HttpProblem(400);
+    }
+    const ownEcdh = fromBase64Url(own.ecdh_public_key);
+    const message = grantSignedMessage({
+      signerMemberId: p.memberId,
+      signerKeyId: recipient,
+      vaultKeyVersion: 1,
+      recipientMemberId: p.memberId,
+      recipientKeyId: recipient,
+      recipientPublicKeySha256: new Uint8Array(await crypto.subtle.digest('SHA-256', ownEcdh)),
+      ephemeralPublicKey: epkBytes,
+      wrappedKey: wrapped,
+    });
+    const verifyKey = await importSignPublicKey(fromBase64Url(own.ecdsa_public_key));
+    if (!(await verifySignature(verifyKey, sig.slice(2), message))) throw new HttpProblem(400);
+
     try {
       await db.batch([
         // グラントがまだなく、宛先が自分の有効な署名鍵付きの鍵であること。違えば 0 を入れて、バッチ全体を巻き戻す
