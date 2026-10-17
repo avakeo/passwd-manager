@@ -18,13 +18,15 @@ export const SIGNATURE_LENGTH = 64;
 export const GRANT_ENVELOPE_LENGTH = 2 + 32 + TAG_LENGTH;
 
 // totp-secret は、サーバーが Workers のシークレットの鍵で暗号化する TOTP のシークレット（E2EE ではない）
-export type AeadUsage = 'item' | 'member-key' | 'admin-sign-key' | 'totp-secret';
+// quick-unlock は、クイックロック解除でパスコード由来の鍵で包んだ Vault 鍵（chrome.storage.session にだけ置く）
+export type AeadUsage = 'item' | 'member-key' | 'admin-sign-key' | 'totp-secret' | 'quick-unlock';
 
 const ALG_FOR_USAGE: Record<AeadUsage | 'grant' | 'signature', number> = {
   item: ALG_AES_256_GCM,
   'member-key': ALG_AES_256_GCM,
   'admin-sign-key': ALG_AES_256_GCM,
   'totp-secret': ALG_AES_256_GCM,
+  'quick-unlock': ALG_AES_256_GCM,
   grant: ALG_HPKE_BASE,
   signature: ALG_ECDSA_P256_SHA256,
 };
@@ -104,6 +106,14 @@ function keyAad(kind: 'member-key' | 'admin-sign-key', ctx: MemberKeyContext): B
   assertId(ctx.keyId);
   if (ctx.publicKeySha256.length !== 32) throw new CryptoError('INVALID_INPUT');
   return utf8(`v${FORMAT_V1}|${kind}|${ctx.keyId}|${toHex(ctx.publicKeySha256)}`);
+}
+
+// v1|quick-unlock|<接続先>|<メンバーID>|<世代>。別の接続先・メンバー・世代の保存とは入れ替えられない
+export function quickUnlockAad(ctx: { apiOrigin: string; memberId: string; vaultKeyVersion: number }): Bytes {
+  assertId(ctx.memberId);
+  assertVersion(ctx.vaultKeyVersion);
+  if (!/^https:\/\/[A-Za-z0-9.-]+(:\d+)?$/.test(ctx.apiOrigin)) throw new CryptoError('INVALID_INPUT');
+  return utf8(`v${FORMAT_V1}|quick-unlock|${ctx.apiOrigin}|${ctx.memberId}|${ctx.vaultKeyVersion}`);
 }
 
 // v1|member-key|<鍵ID>|<公開鍵（65バイト）の SHA-256 の16進>
