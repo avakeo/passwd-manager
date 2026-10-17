@@ -273,6 +273,49 @@ test('Codex #1 更新の途中で別の人がログインしても、遅れて�
   assert.equal(stored.memberId, otherId, '後からログインした人のトークンのまま');
 });
 
+// ロック解除の途中（鍵を開けた後、自分宛てのグラントを取りに行っている間）に、ロック・ログアウト・15分の経過が起きる
+for (const [name, interrupt] of [
+  ['ロック', async (w: World) => void (await send(w, { type: 'lock' }, POPUP))],
+  ['ログアウト', async (w: World) => void (await send(w, { type: 'logout' }, POPUP))],
+  ['15分の経過', async () => at(16 * MIN)],
+] as const) {
+  test(`Codex #3 ロック解除の途中で${name}が起きても、終わった後に鍵がメモリに残らない`, async () => {
+    const w = world();
+    await adminReady(w);
+    await send(w, { type: 'lock' }, POPUP);
+    const gate = hold(w, 'GET /v1/vault');
+    const pending = send(w, { type: 'unlock', masterPassword: ADMIN_PASSWORD }, POPUP);
+    await gate.arrived;
+    await interrupt(w);
+    gate.release();
+    const reply = await pending;
+    assert.deepEqual([reply.ok, reply.error], [false, 'LOCKED'], JSON.stringify(reply));
+    assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  });
+}
+
+test('Codex #3 鍵の作成と最初の Vault の途中でロックしても、終わった後に鍵がメモリに残らない', async () => {
+  const w = world();
+  const userId = newDiscordUser();
+  await loginAndRegisterTotp(w, userId, true);
+  const keyGate = hold(w, 'PUT /v1/me/keys');
+  const creating = send(w, { type: 'createKey', masterPassword: ADMIN_PASSWORD, replace: false });
+  await keyGate.arrived;
+  await send(w, { type: 'lock' }, POPUP);
+  keyGate.release();
+  assert.equal((await creating).error, 'LOCKED');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  // 鍵はサーバーに登録済み。ロック解除してから最初の Vault を作り、その途中でロックする
+  assert.equal((await send(w, { type: 'unlock', masterPassword: ADMIN_PASSWORD }, POPUP)).vault, 'needs-init');
+  const initGate = hold(w, 'POST /v1/vault/init');
+  const initializing = send(w, { type: 'initVault' });
+  await initGate.arrived;
+  await send(w, { type: 'lock' }, POPUP);
+  initGate.release();
+  assert.equal((await initializing).error, 'LOCKED');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
 test('メンバー：鍵を作っても、照合と承認（フェーズ4）が済むまでグラントを開かない（P-04）', async () => {
   const w = world();
   await adminReady(w);
