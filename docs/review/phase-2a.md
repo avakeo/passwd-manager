@@ -69,6 +69,8 @@
 | E-08 | 任意のページのコンソールから `chrome.runtime.sendMessage('<拡張機能 ID>', {type:'lock'})` を試し、届かないこと |
 | 端末名の表示 | 端末名は文字として出ること（ポップアップからのログインは「Chrome」で固定） |
 | メンバーの鍵 | 2つ目のアカウントでログインし、鍵を作ると「承認を待っています」になること |
+| 悪意ある拡張機能：webRequest（範囲外の確認。DeepSeek #1） | 2つ目の拡張機能を開発者モードで作る（manifest に `"permissions": ["webRequest"]` と `"host_permissions": ["<API の接続先>/*"]`）。Service Worker で `chrome.webRequest.onBeforeSendHeaders.addListener(d => …, { urls: ['<API の接続先>/*'] }, ['requestHeaders', 'extraHeaders'])` を登録し、teampw で操作したときに Authorization ヘッダーが見えることを記録する。`onBeforeRequest` に `['requestBody']` を付けると、更新の本文のリフレッシュトークンも見える。防げないことを確かめる項目（仕様書の範囲外の表） |
+| 悪意ある拡張機能：debugger（範囲外の確認。DeepSeek #3） | 2つ目の拡張機能に `"permissions": ["debugger"]` を付け、`chrome.debugger.attach({ tabId }, '1.3')` で teampw の全画面ページのタブにつなぎ、`Runtime.evaluate` で入力欄の値が読めることと、つないでいる間 Chrome が警告のバーを出すことを記録する |
 
 ## 拡張機能を Chrome に読み込む手順
 
