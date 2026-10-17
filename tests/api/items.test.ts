@@ -95,9 +95,35 @@ test('S-02 S-10 削除すると暗号文が消え、差分同期に削除が含�
   const row = t.db.db.prepare('SELECT ciphertext, deleted_at FROM items WHERE id = ?').get(ITEM_ID)!;
   assert.equal(row.ciphertext, null);
   assert.notEqual(row.deleted_at, null);
-  const list = await json(await t.request('GET', '/v1/items?since=0', alice.token));
+  const list = await json(await t.request('GET', '/v1/items?after=0', alice.token));
   const items = list.items as { id: string; deleted: boolean; ciphertext: string | null }[];
   assert.deepEqual(items.map((i) => [i.id, i.deleted, i.ciphertext]), [[ITEM_ID, true, null]]);
+});
+
+test('S-02 差分同期は change_seq（書いたときの Vault リビジョン）で取り、同じミリ秒に書かれたものも取りこぼさない', async () => {
+  const t = setup();
+  const alice = await t.addMember('active');
+  const realNow = Date.now;
+  const frozen = realNow();
+  Date.now = () => frozen; // 2つの書き込みも、間の読み出しも、同じミリ秒
+  try {
+    await createItem(t, alice.token, 'item_AAAAAAAAAAAAAAAAAAAAAA');
+    const first = await json(await t.request('GET', '/v1/items?after=0', alice.token));
+    const firstItems = first.items as { id: string; change_seq: number }[];
+    assert.deepEqual(firstItems.map((i) => i.id), ['item_AAAAAAAAAAAAAAAAAAAAAA']);
+    const cursor = firstItems[0]!.change_seq;
+    assert.equal(cursor, first.vault_revision);
+    await createItem(t, alice.token, 'item_BBBBBBBBBBBBBBBBBBBBBB');
+    const second = await json(await t.request('GET', `/v1/items?after=${cursor}`, alice.token));
+    assert.deepEqual((second.items as { id: string }[]).map((i) => i.id), ['item_BBBBBBBBBBBBBBBBBBBBBB'], '同じミリ秒の2件目も取れる');
+    // 削除も change_seq が進み、次の差分に入る
+    await t.request('DELETE', '/v1/items/item_AAAAAAAAAAAAAAAAAAAAAA', alice.token, { revision: 1 });
+    const third = await json(await t.request('GET', `/v1/items?after=${(second.items as { change_seq: number }[])[0]!.change_seq}`, alice.token));
+    assert.deepEqual((third.items as { id: string; deleted: boolean }[]).map((i) => [i.id, i.deleted]), [['item_AAAAAAAAAAAAAAAAAAAAAA', true]]);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal((await t.request('GET', '/v1/items?after=x', alice.token)).status, 400);
 });
 
 test('I-03 既存のアイテムIDで新規作成すると 409', async () => {
@@ -152,7 +178,7 @@ test('Z-01 承認待ちのメンバーがアイテムや Vault を取得する�
   const active = await t.addMember('active');
   await createItem(t, active.token);
   const pending = await t.addMember('pending');
-  await expectProblem(await t.request('GET', '/v1/items?since=0', pending.token), 403);
+  await expectProblem(await t.request('GET', '/v1/items?after=0', pending.token), 403);
   await expectProblem(await t.request('GET', '/v1/vault', pending.token), 403);
   await expectProblem(
     await t.request('POST', '/v1/items', pending.token, { id: 'item_BBBBBBBBBBBBBBBBBBBBBB', vault_key_version: 1, ciphertext: fakeCiphertext() }),
@@ -164,20 +190,20 @@ test('Z-01 承認待ちのメンバーがアイテムや Vault を取得する�
   );
   await expectProblem(await t.request('DELETE', `/v1/items/${ITEM_ID}`, pending.token, { revision: 1 }), 403);
   // 承認済みのメンバーは取得できる
-  assert.equal((await t.request('GET', '/v1/items?since=0', active.token)).status, 200);
+  assert.equal((await t.request('GET', '/v1/items?after=0', active.token)).status, 200);
 });
 
 test('Z-06 削除済みのメンバーの操作は 403', async () => {
   const t = setup();
   const removed = await t.addMember('removed');
-  await expectProblem(await t.request('GET', '/v1/items?since=0', removed.token), 403);
+  await expectProblem(await t.request('GET', '/v1/items?after=0', removed.token), 403);
   await expectProblem(await t.request('GET', '/v1/vault', removed.token), 403);
 });
 
 test('Z-07 Web ページ用（読み取り専用）のトークンで書き込むと 403', async () => {
   const t = setup();
   const web = await t.addMember('active', { scope: 'web' });
-  assert.equal((await t.request('GET', '/v1/items?since=0', web.token)).status, 200);
+  assert.equal((await t.request('GET', '/v1/items?after=0', web.token)).status, 200);
   await expectProblem(
     await t.request('POST', '/v1/items', web.token, { id: ITEM_ID, vault_key_version: 1, ciphertext: fakeCiphertext() }),
     403,
@@ -191,11 +217,11 @@ test('A-05 A-06 トークンなし、知らないトークン、期限切れ、�
   const carol = await t.addMember('active');
   t.db.db.prepare('UPDATE sessions SET expires_at = 1 WHERE member_id = ?').run(bob.id);
   t.db.db.prepare('UPDATE sessions SET revoked_at = 1 WHERE member_id = ?').run(carol.id);
-  await expectProblem(await t.request('GET', '/v1/items?since=0'), 401);
-  await expectProblem(await t.request('GET', '/v1/items?since=0', 'unknown-token'), 401);
-  await expectProblem(await t.request('GET', '/v1/items?since=0', bob.token), 401);
-  await expectProblem(await t.request('GET', '/v1/items?since=0', carol.token), 401);
-  assert.equal((await t.request('GET', '/v1/items?since=0', alice.token)).status, 200);
+  await expectProblem(await t.request('GET', '/v1/items?after=0'), 401);
+  await expectProblem(await t.request('GET', '/v1/items?after=0', 'unknown-token'), 401);
+  await expectProblem(await t.request('GET', '/v1/items?after=0', bob.token), 401);
+  await expectProblem(await t.request('GET', '/v1/items?after=0', carol.token), 401);
+  assert.equal((await t.request('GET', '/v1/items?after=0', alice.token)).status, 200);
 });
 
 test('W-01 W-02 CORS は https://pw.example.com だけを許可する', async () => {
