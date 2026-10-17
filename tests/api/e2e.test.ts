@@ -22,6 +22,8 @@ const C_PASSWORD = 'c-san-kawa-mori-yama-18';
 const adminKey = await createAdminKey(ADMIN_PASSWORD);
 const attackerKey = await createAdminKey('attacker-kuro-yami-99x-zz');
 const cKey = await createMemberKey(C_PASSWORD);
+// 管理者は TOTP が必須（登録するまでは読み書きもできない：A-11）。テストでは登録済みにしておく
+const ADMIN_TOTP_SECRET = new Uint8Array(20).fill(3);
 
 type Setup = ReturnType<typeof setup>;
 
@@ -95,7 +97,7 @@ function signerFromApi(s: NonNullable<MeResponse['admin_signer']>) {
 // 管理者と C さんを登録し、承認のときの双方向の照合を済ませた状態を作る
 async function approved() {
   const t = setup();
-  const adminSession = await t.addMember('active', { role: 'admin' });
+  const adminSession = await t.addMember('active', { role: 'admin', totpSecret: ADMIN_TOTP_SECRET });
   const cSession = await t.addMember('active');
   insertKey(t, adminSession.id, adminKey.record);
   insertKey(t, cSession.id, cKey.record);
@@ -219,7 +221,7 @@ test('P-05（API 経由） サーバーが /v1/me で返す管理者の署名用
 
 test('双方向の照合のため、承認待ちのメンバーも GET /v1/me で管理者の署名用公開鍵を受け取れる（Vault は 403 のまま）', async () => {
   const t = setup();
-  const adminSession = await t.addMember('active', { role: 'admin' });
+  const adminSession = await t.addMember('active', { role: 'admin', totpSecret: ADMIN_TOTP_SECRET });
   insertKey(t, adminSession.id, adminKey.record);
   const pending = await t.addMember('pending');
   const res = await t.request('GET', '/v1/me', pending.token);
@@ -263,8 +265,8 @@ test('Z-04 他のメンバー宛てのグラントは取得できない（GET /v
 // （Web ページに XSS があっても、拡張機能の暗号材料を持ち出させない）。
 test('Z-08 GET /v1/me は必要な分だけを返し、Web 用トークンには暗号化した秘密鍵（ECDH と署名の両方）を返さない（DeepSeek #5・#10）', async () => {
   const t = setup();
-  const admin = await t.addMember('active', { role: 'admin' });
-  const adminWeb = await t.addMember('active', { role: 'admin', scope: 'web' });
+  const admin = await t.addMember('active', { role: 'admin', totpSecret: ADMIN_TOTP_SECRET });
+  const adminWeb = await t.addMember('active', { role: 'admin', scope: 'web', totpSecret: ADMIN_TOTP_SECRET });
   t.db.db.prepare(`UPDATE sessions SET member_id = ? WHERE id = 'session_2'`).run(admin.id);
   const c = await t.addMember('active');
   const cWeb = await t.addMember('active', { scope: 'web' });
@@ -275,12 +277,12 @@ test('Z-08 GET /v1/me は必要な分だけを返し、Web 用トークンには
 
   // 拡張機能のメンバー：自分の鍵を開くのに要るものと、照合用の管理者の組。署名鍵の列は持たない
   const cExt = await me(c.token);
-  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'recovery_codes_remaining', 'role']);
   assert.deepEqual(Object.keys(cExt.key).sort(), ['encrypted_private_key', 'format_version', 'id', 'kdf_algorithm', 'kdf_params', 'kdf_salt', 'ecdh_public_key'].sort());
 
   // 拡張機能の管理者：署名鍵も開く。照合用の管理者の組は要らない（自分の行を使う）
   const adminExt = await me(admin.token);
-  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'recovery_codes_remaining', 'role']);
   assert.ok('encrypted_sign_private_key' in adminExt.key && 'ecdsa_public_key' in adminExt.key);
 
   // Web 用：暗号化した秘密鍵も、ロック解除に使う KDF の設定も返さない

@@ -17,12 +17,14 @@ export const SIGNATURE_LENGTH = 64;
 // グラントの wrapped_key の長さ：形式1 ＋ アルゴリズムID1 ＋ Vault 鍵32 ＋ 認証タグ16
 export const GRANT_ENVELOPE_LENGTH = 2 + 32 + TAG_LENGTH;
 
-export type AeadUsage = 'item' | 'member-key' | 'admin-sign-key';
+// totp-secret は、サーバーが Workers のシークレットの鍵で暗号化する TOTP のシークレット（E2EE ではない）
+export type AeadUsage = 'item' | 'member-key' | 'admin-sign-key' | 'totp-secret';
 
 const ALG_FOR_USAGE: Record<AeadUsage | 'grant' | 'signature', number> = {
   item: ALG_AES_256_GCM,
   'member-key': ALG_AES_256_GCM,
   'admin-sign-key': ALG_AES_256_GCM,
+  'totp-secret': ALG_AES_256_GCM,
   grant: ALG_HPKE_BASE,
   signature: ALG_ECDSA_P256_SHA256,
 };
