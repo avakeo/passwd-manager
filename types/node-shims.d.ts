@@ -5,6 +5,7 @@ declare module 'node:test' {
   export function test(name: string, fn: TestFn): Promise<void>;
   export function describe(name: string, fn: () => void): Promise<void>;
   export function after(fn: () => void | Promise<void>): void;
+  export function beforeEach(fn: () => void | Promise<void>): void;
   // 時刻を固定する（TOTP のテスト）。Date だけを置き換える
   export const mock: {
     timers: {

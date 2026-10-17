@@ -2,7 +2,7 @@
 // 本物の Discord は呼ばない。globalThis.fetch を偽の Discord（tests/helpers/fake-discord.ts）に置き換え、本番と同じコードを通す。
 // 時刻は node:test の mock.timers で固定し、TOTP の期待するコードは src を使わずに計算する（tests/helpers/totp-reference.ts）。
 
-import { after, mock, test } from 'node:test';
+import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createLoginRequest } from '../../src/client/discord-login.ts';
 import { fromBase64Url } from '../../src/crypto/bytes.ts';
@@ -14,6 +14,8 @@ import { base32ToBytes, referenceTotp, stepAt } from '../helpers/totp-reference.
 const T0 = 1_800_000_000_000; // 30秒の区切りのちょうど始まり
 mock.timers.enable({ apis: ['Date'], now: T0 });
 after(() => mock.timers.reset());
+// 途中で失敗したテストが時刻を進めたままでも、次のテストに持ち越さない
+beforeEach(() => mock.timers.setTime(T0));
 
 const fake = new FakeDiscord({
   clientId: TEST_ENV.DISCORD_CLIENT_ID,
