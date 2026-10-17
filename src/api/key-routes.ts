@@ -2,7 +2,7 @@
 // 仕様書「鍵とメンバーのライフサイクル > 初期化（管理者）」。サーバーは鍵も暗号文も読まない。形と長さだけを確かめて保存する。
 
 import type { Hono } from 'hono';
-import { hasRecentTotp, requireRecentTotp } from './auth.ts';
+import { hasRecentTotp } from './auth.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
 import { HttpProblem } from './problem.ts';
@@ -61,7 +61,9 @@ function isGuardFailure(e: unknown): boolean {
 export function registerKeyRoutes(app: Hono<Env>): void {
   // 鍵の登録。前の鍵は revoked にし、新しい鍵を active にする。
   //   メンバーの登録し直しは承認待ちに戻る（P-02）。登録し直しは5分以内の TOTP の確認が要る。
-  //   管理者の登録し直しは、グラントがまだないときだけ（確認は保存と同じバッチの中で行う）。
+  //   管理者の登録し直しは、グラントがまだないときだけ。
+  //   「有効な鍵があるか」「あれば5分以内に TOTP を確かめたか」「管理者ならグラントがないか」は、保存と同じバッチの先頭で確かめる
+  //   （同時に2回送っても、後の方が TOTP の確認なしに前の鍵を無効にできない：Codex #2）。
   app.put('/v1/me/keys', async (c) => {
     const p = c.get('principal');
     const isAdmin = p.role === 'admin';
@@ -79,17 +81,26 @@ export function registerKeyRoutes(app: Hono<Env>): void {
 
     const db = c.env.DB;
     const now = Date.now();
-    const existing = await db.prepare(`SELECT 1 AS x FROM member_keys WHERE member_id = ? AND status = 'active'`).bind(p.memberId).first();
-    // 盗まれたトークンで鍵を差し替えて、承認待ちに落とせないように
-    if (existing) requireRecentTotp(p, now);
+    const recent = hasRecentTotp(p, now) ? 1 : 0;
+    const hasActive = `EXISTS (SELECT 1 FROM member_keys WHERE member_id = ? AND status = 'active')`;
     try {
       await db.batch([
+        // 1つでも違えば 0 を入れて、バッチ全体を巻き戻す（盗まれたトークンで鍵を差し替えて、承認待ちに落とせないように）
         db
-          .prepare(`INSERT INTO rotation_guard (ok) SELECT CASE WHEN ? = 'admin' AND EXISTS (SELECT 1 FROM vault_key_grants) THEN 0 ELSE 1 END`)
-          .bind(p.role),
+          .prepare(
+            `INSERT INTO rotation_guard (ok)
+             SELECT CASE WHEN ? = 'admin' AND EXISTS (SELECT 1 FROM vault_key_grants) THEN 0
+                         WHEN ${hasActive} AND ? = 0 THEN 0
+                         ELSE 1 END`,
+          )
+          .bind(p.role, p.memberId, recent),
+        db
+          .prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at)
+                    SELECT ?, CASE WHEN ${hasActive} THEN 'key.reregister' ELSE 'key.register' END, 'member_key', ?, ?`)
+          .bind(p.memberId, p.memberId, id, now),
+        // 登録し直し（有効な鍵がある）なら、承認済みのメンバーを承認待ちに戻す（P-02）
+        db.prepare(`UPDATE members SET status = 'pending' WHERE id = ? AND role = 'member' AND status = 'active' AND ${hasActive}`).bind(p.memberId, p.memberId),
         db.prepare(`UPDATE member_keys SET status = 'revoked' WHERE member_id = ? AND status = 'active'`).bind(p.memberId),
-        // 直前の文が前の鍵を revoked にしたとき（登録し直し）だけ、承認済みのメンバーを承認待ちに戻す
-        db.prepare(`UPDATE members SET status = 'pending' WHERE id = ? AND role = 'member' AND status = 'active' AND changes() > 0`).bind(p.memberId),
         db
           .prepare(
             `INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
@@ -98,14 +109,13 @@ export function registerKeyRoutes(app: Hono<Env>): void {
           )
           .bind(id, p.memberId, ecdh, encrypted, ecdsa, encryptedSign, KDF_PBKDF2_SHA256, params, salt, FORMAT_V1, now),
         db.prepare('DELETE FROM rotation_guard'),
-        db
-          .prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) VALUES (?, ?, 'member_key', ?, ?)`)
-          .bind(p.memberId, existing ? 'key.reregister' : 'key.register', id, now),
       ]);
     } catch (e) {
-      // グラントがある管理者の登録し直し、または同じ鍵ID
-      if (isGuardFailure(e)) throw new HttpProblem(409);
-      throw e;
+      if (!isGuardFailure(e)) throw e;
+      // 有効な鍵があって5分以内の TOTP の確認がない（403）か、グラントがある管理者・同じ鍵ID（409）
+      const existing = await db.prepare(`SELECT 1 AS x FROM member_keys WHERE member_id = ? AND status = 'active'`).bind(p.memberId).first();
+      if (existing && recent === 0) throw new HttpProblem(403);
+      throw new HttpProblem(409);
     }
     return c.body(null, 204);
   });

@@ -140,6 +140,30 @@ test('鍵の登録し直しは、直近5分以内に TOTP を確かめたセッ�
   assert.equal((await t.request('PUT', '/v1/me/keys', fresh.token, keyBody(memberKey2.record))).status, 204);
 });
 
+test('Codex #2 初めての鍵の登録を同時に2回送っても、片方は失敗し、TOTP の確認なしに前の鍵が無効にならない（確認は保存と同じバッチ）', async () => {
+  const t = setup();
+  const m = await t.addMember('active'); // TOTP を確かめてから5分を過ぎたセッション（確かめた時刻なし）
+  // 2つのリクエストが、どちらもバッチの前まで進んでから、順にバッチを実行する
+  let waiting = 2;
+  let release!: () => void;
+  const both = new Promise<void>((r) => (release = r));
+  t.db.beforeBatch = async () => {
+    waiting -= 1;
+    if (waiting === 0) release();
+    await both;
+  };
+  const results = await Promise.all([
+    t.request('PUT', '/v1/me/keys', m.token, keyBody(memberKey.record)),
+    t.request('PUT', '/v1/me/keys', m.token, keyBody(memberKey2.record)),
+  ]);
+  assert.deepEqual(results.map((r) => r.status).sort(), [204, 403]);
+  assert.equal(count(t, `SELECT COUNT(*) AS n FROM member_keys WHERE member_id = ? AND status = 'active'`, m.id), 1);
+  assert.equal(count(t, `SELECT COUNT(*) AS n FROM member_keys WHERE member_id = ? AND status = 'revoked'`, m.id), 0, '前の鍵は無効になっていない');
+  assert.equal(t.db.db.prepare('SELECT status FROM members WHERE id = ?').get(m.id)!.status, 'active', '承認待ちに落ちていない');
+  assert.deepEqual(t.db.db.prepare(`SELECT action FROM audit_logs WHERE target_type = 'member_key'`).all().map((r) => r.action), ['key.register']);
+  assert.equal(count(t, 'SELECT COUNT(*) AS n FROM rotation_guard'), 0);
+});
+
 test('管理者の鍵の登録し直しは、グラントがまだないときだけ。あれば 409', async () => {
   const t = setup();
   const admin = await registeredAdmin(t);
