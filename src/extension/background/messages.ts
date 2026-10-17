@@ -17,6 +17,7 @@ const RECOVERY: Field = { kind: 'string', min: 1, max: 64, pattern: /^[A-Za-z0-9
 // 種類ごとに、受け付ける項目の組（どれか1つにぴったり合うこと）
 export const MESSAGE_SCHEMAS = {
   status: [{}],
+  opened: [{}], // ポップアップや全画面ページを開いた（利用者の操作）
   login: [{ deviceLabel: { kind: 'string', min: 1, max: 64 } }],
   loginTotp: [{ code: CODE }, { recoveryCode: RECOVERY }],
   logout: [{}],
@@ -32,6 +33,10 @@ export const MESSAGE_SCHEMAS = {
 } satisfies Record<string, Record<string, Field>[]>;
 
 export type MessageType = keyof typeof MESSAGE_SCHEMAS;
+
+// 放置のロックの時刻を新しくしない、確認だけの種類。ほかはすべて利用者の操作から来る（DeepSeek #4）。
+// 同期のポーリングなど、利用者が触っていないのに送られるものは、ここに入れる
+export const PASSIVE_TYPES: ReadonlySet<MessageType> = new Set(['status']);
 export type Message = { type: MessageType } & Record<string, string | boolean>;
 
 export function acceptedSender(runtime: { id: string; getURL(path: string): string }, sender: MessageSender): boolean {

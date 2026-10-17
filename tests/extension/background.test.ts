@@ -192,6 +192,33 @@ test('放置のロック：15分を過ぎてから来たメッセージは、処
   assert.equal((await send(w, { type: 'initVault' })).error, 'LOCKED');
 });
 
+test('DeepSeek #4 status のような確認だけのメッセージを送り続けても、利用者の操作がなければ15分でロックされる', async () => {
+  const w = world();
+  await adminReady(w);
+  // 15分より少し短い間隔で、60分まで status だけを送り続ける（同期のポーリングの代わり）
+  let lockedAt: number | null = null;
+  for (let ms = IDLE_LOCK_MS - 1000; ms <= 60 * MIN; ms += IDLE_LOCK_MS - 1000) {
+    at(ms);
+    if ((await send(w, { type: 'status' }, POPUP)).locked === true) {
+      lockedAt = ms;
+      break;
+    }
+  }
+  assert.equal(lockedAt, 2 * (IDLE_LOCK_MS - 1000), '最初の操作（最初の Vault）から15分を過ぎた最初の status でロック');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
+test('DeepSeek #4 画面を開く（opened）、ロック解除などの利用者の操作は、放置の時刻を新しくする', async () => {
+  const w = world();
+  await adminReady(w);
+  at(IDLE_LOCK_MS - 1000);
+  assert.equal((await send(w, { type: 'opened' }, POPUP)).ok, true);
+  at(2 * (IDLE_LOCK_MS - 1000));
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, false, '画面を開いてから15分以内');
+  at(2 * (IDLE_LOCK_MS - 1000) + IDLE_LOCK_MS);
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
+});
+
 test('放置のロック：Service Worker が起きたときにも確かめ、15分を過ぎていればロックの後始末（解除用の保存を消す）をする', async () => {
   const w = world();
   await adminReady(w);

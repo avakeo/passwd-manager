@@ -171,4 +171,5 @@ async function render(): Promise<void> {
   if (target) target.scrollIntoView();
 }
 
-void render();
+// 全画面ページを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない
+void send({ type: 'opened' }).then(() => render());

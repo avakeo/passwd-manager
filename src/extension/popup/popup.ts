@@ -104,4 +104,5 @@ function renderTotp(): void {
   root.append(form);
 }
 
-void render();
+// ポップアップを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない
+void send({ type: 'opened' }).then(() => render());

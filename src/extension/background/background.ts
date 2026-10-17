@@ -6,7 +6,7 @@
 //   - メッセージは messages.ts の検査を通ったものだけを処理する（E-08）
 
 import type { ChromeLike, MessageSender } from './chrome-like.ts';
-import { acceptedSender, parseMessage, type Message } from './messages.ts';
+import { PASSIVE_TYPES, acceptedSender, parseMessage, type Message } from './messages.ts';
 import { ApiClient, ApiError, type ApiResult } from './api-client.ts';
 import { SessionStore, chromePinStore, chromeTrustStorage, type SessionRecord } from './storage.ts';
 import { createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
@@ -381,6 +381,10 @@ export function createBackground(deps: BackgroundDeps): Background {
       return { ok: true };
     },
 
+    async opened() {
+      return { ok: true };
+    },
+
     // 最初の Vault（仕様書「初期化（管理者）」）：Vault 鍵（世代1）を作り、自分宛てに包んで署名し、送る。
     // 自分の署名鍵を固定し、最後に見た世代を1にしてから作る（暗号コアは、固定と世代がそろうまでグラントを作らない）
     async initVault() {
@@ -466,9 +470,9 @@ export function createBackground(deps: BackgroundDeps): Background {
       if (!acceptedSender(chrome.runtime, sender)) return { ok: false, error: 'BAD_REQUEST' };
       const message = parseMessage(raw);
       if (message === null) return { ok: false, error: 'BAD_REQUEST' };
-      // 放置のロックは、どの指示も処理する前に確かめる
+      // 放置のロックは、どの指示も処理する前に確かめる。時刻を新しくするのは利用者の操作から来たものだけ（DeepSeek #4）
       await checkIdle();
-      await chrome.storage.session.set({ [LAST_ACTIVITY_KEY]: Date.now() });
+      if (!PASSIVE_TYPES.has(message.type)) await chrome.storage.session.set({ [LAST_ACTIVITY_KEY]: Date.now() });
       try {
         return await handlers[message.type](message);
       } catch (e) {
