@@ -60,8 +60,12 @@ export class SqliteD1 implements D1Database {
     return new SqliteStatement(this.db, sql);
   }
 
+  // テストで「同時に来た2つのリクエストが、どちらも確認を済ませてからバッチに入る」順を作るための待ち合わせ
+  beforeBatch: (() => Promise<void>) | null = null;
+
   // D1 の batch と同じく、1つのトランザクションで実行し、途中で失敗すれば全体を巻き戻す
   async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    if (this.beforeBatch) await this.beforeBatch();
     this.db.exec('BEGIN');
     try {
       const results = statements.map((s) => (s as SqliteStatement).runSync<T>());

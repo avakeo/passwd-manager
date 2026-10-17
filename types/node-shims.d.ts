@@ -64,10 +64,26 @@ declare module 'node:fs' {
   export function existsSync(path: string | URL): boolean;
   export function mkdirSync(path: string | URL, options?: { recursive?: boolean }): void;
   export function readdirSync(path: string | URL, options?: { recursive: true }): string[];
+  export function copyFileSync(src: string | URL, dest: string | URL): void;
+  export function rmSync(path: string | URL, options?: { recursive?: boolean; force?: boolean }): void;
+}
+
+// 拡張機能のビルド（scripts/build-extension.ts）で tsc を呼ぶ
+declare module 'node:child_process' {
+  export function execFileSync(file: string, args: string[], options?: { stdio?: 'inherit' | 'pipe' }): unknown;
+}
+
+declare module 'node:url' {
+  export function fileURLToPath(url: string | URL): string;
 }
 
 // 管理者署名の既知解テストで、src を使わずに署名を確かめるためだけに使う
 declare module 'node:crypto' {
+  export function createHash(alg: 'sha256'): { update(data: Uint8Array): { digest(enc: 'hex'): string } };
+  export function generateKeyPairSync(
+    type: 'rsa',
+    options: { modulusLength: number; publicKeyEncoding: { type: 'spki'; format: 'der' }; privateKeyEncoding: { type: 'pkcs8'; format: 'pem' } },
+  ): { publicKey: Uint8Array; privateKey: string };
   interface KeyObject {
     readonly type: string;
   }
@@ -112,8 +128,13 @@ declare module 'node:readline/promises' {
 
 declare const process: {
   argv: string[];
+  execPath: string;
+  stderr: { write(s: string): void };
   exitCode: number | undefined;
   env: Record<string, string | undefined>;
   stdin: unknown;
-  stdout: unknown;
+  stdout: { write(s: string): void };
 };
+
+// 拡張機能 ID を固定する鍵（scripts/extension-key.ts）
+declare const Buffer: { from(b: Uint8Array): { toString(encoding: 'base64'): string } };

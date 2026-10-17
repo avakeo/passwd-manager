@@ -1,0 +1,31 @@
+# push と pull request のたびに、テストと型検査を走らせる（仕様書「開発体制」）。
+# 外部のアクションはコミットの SHA で固定する（タグは付け替えられるため）。シークレットは使わない。
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.16'
+          cache: npm
+      # esbuild と workerd の postinstall は、手元と同じく動かさない（テストに wrangler の実行ファイルは要らない）
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run typecheck

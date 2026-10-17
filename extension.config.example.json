@@ -1,0 +1,5 @@
+{
+  "apiOrigin": "https://pw-api.example.com",
+  "discordClientId": "100000000000000001",
+  "manifestKey": "<scripts/extension-key.ts が表示する manifestKey>"
+}
