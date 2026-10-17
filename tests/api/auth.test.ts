@@ -238,6 +238,33 @@ test('A-12 使用済みのリフレッシュトークンをもう一度使うと
   assert.equal((await refresh(t, first.body.refresh_token!)).res.status, 401);
 });
 
+test('A-12 2回以上更新した後に、最初のリフレッシュトークンを送っても、セッションごと無効になる', async () => {
+  const t = setup();
+  const { body } = await login(t, newDiscordUser());
+  const r1 = await refresh(t, body.refresh_token!);
+  const r2 = await refresh(t, r1.body.refresh_token!);
+  const r3 = await refresh(t, r2.body.refresh_token!);
+  assert.equal(r3.res.status, 200);
+  // 2世代以上前のトークン（盗まれたもの）が使われた
+  assert.equal((await refresh(t, body.refresh_token!)).res.status, 401);
+  assert.equal((await t.request('GET', '/v1/me/sessions', r3.body.access_token)).status, 401);
+  assert.equal((await refresh(t, r3.body.refresh_token!)).res.status, 401);
+  // 別の人のセッションは巻き込まない
+  const other = await login(t, newDiscordUser());
+  assert.equal((await t.request('GET', '/v1/me/sessions', other.body.access_token)).status, 200);
+});
+
+test('使い終わったリフレッシュトークンの記録は、セッションの期限が切れたら、次のログインのときに消す', async () => {
+  const t = setup();
+  const { body } = await login(t, newDiscordUser());
+  await refresh(t, body.refresh_token!);
+  assert.equal(count(t, 'used_refresh_tokens'), 1);
+  mock.timers.setTime(T0 + 7 * 24 * 60 * 60 * 1000);
+  await login(t, newDiscordUser());
+  assert.equal(count(t, 'used_refresh_tokens'), 0);
+  mock.timers.setTime(T0);
+});
+
 test('A-12 同じリフレッシュトークンで同時に更新すると、条件付きの更新に負けた側も使い回しとみなし、セッションごと無効になる', async () => {
   const t = setup();
   const { body } = await login(t, newDiscordUser());

@@ -1,6 +1,7 @@
 // セッション（自前のアクセストークンとリフレッシュトークン）。仕様書「認可とセッション」「D1テーブル設計 > sessions」。
 //   アクセスは15分、リフレッシュはログインから7日（更新しても延ばさない）。トークンは乱数32バイトで、D1 には SHA-256 だけを置く。
-//   更新のたびに両方を新しくし、直前のリフレッシュトークンが再び使われたら、セッションごと無効にする（A-12）。
+//   更新のたびに両方を新しくする。使い終わったリフレッシュトークンはセッションごとに覚えておき（used_refresh_tokens）、
+//   どれかが再び使われたら、直前のものでなくても、セッションごと無効にする（A-12）。
 
 import { sha256Hex } from './auth.ts';
 import type { D1Database } from './d1.ts';
@@ -22,6 +23,8 @@ export async function issueSession(
   const now = Date.now();
   const accessToken = newToken();
   const refreshToken = newToken();
+  // 期限の切れたセッションの、使い終わったリフレッシュトークンの記録を消す（更新できないので、もう検知に要らない）
+  await db.prepare('DELETE FROM used_refresh_tokens WHERE expires_at <= ?').bind(now).run();
   await db
     .prepare(
       `INSERT INTO sessions (id, member_id, access_token_hash, refresh_token_hash, device_label, created_at, expires_at,
@@ -51,7 +54,10 @@ export async function refreshSession(
     .first<{ id: string; revoked_at: number | null; refresh_expires_at: number | null; discord_user_id: string; status: string }>();
   if (!row) {
     // 使用済みのリフレッシュトークン：盗まれた可能性があるので、そのセッションごと無効にする（A-12）
-    await db.prepare('UPDATE sessions SET revoked_at = ? WHERE prev_refresh_token_hash = ? AND revoked_at IS NULL').bind(now, hash).run();
+    await db
+      .prepare('UPDATE sessions SET revoked_at = ? WHERE id = (SELECT session_id FROM used_refresh_tokens WHERE token_hash = ?) AND revoked_at IS NULL')
+      .bind(now, hash)
+      .run();
     throw new HttpProblem(401);
   }
   if (row.revoked_at !== null || row.refresh_expires_at === null || Number(row.refresh_expires_at) <= now) throw new HttpProblem(401);
@@ -61,14 +67,17 @@ export async function refreshSession(
   }
   const accessToken = newToken();
   const newRefreshToken = newToken();
-  const res = await db
-    .prepare(
-      `UPDATE sessions SET access_token_hash = ?, refresh_token_hash = ?, prev_refresh_token_hash = ?, expires_at = ?, last_used_at = ?
-        WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL`,
-    )
-    .bind(await sha256Hex(accessToken), await sha256Hex(newRefreshToken), hash, now + ACCESS_TOKEN_TTL_MS, now, row.id, hash)
-    .run();
-  if (res.meta.changes !== 1) {
+  const [res] = await db.batch([
+    db
+      .prepare(
+        `UPDATE sessions SET access_token_hash = ?, refresh_token_hash = ?, expires_at = ?, last_used_at = ?
+          WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL`,
+      )
+      .bind(await sha256Hex(accessToken), await sha256Hex(newRefreshToken), now + ACCESS_TOKEN_TTL_MS, now, row.id, hash),
+    // 更新できたときだけ、使い終わったトークンとして覚える
+    db.prepare('INSERT INTO used_refresh_tokens (token_hash, session_id, expires_at) SELECT ?, ?, ? WHERE changes() = 1').bind(hash, row.id, Number(row.refresh_expires_at)),
+  ]);
+  if (res!.meta.changes !== 1) {
     // 同じトークンで同時に更新された。負けた側も使い回しとみなし、勝った側のトークンも含めてセッションごと無効にする（A-12）
     await revokeSession(db, row.id);
     throw new HttpProblem(401);
