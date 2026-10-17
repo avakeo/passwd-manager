@@ -60,6 +60,7 @@ export async function authenticate(db: D1Database, authorization: string | undef
 // 承認待ちでも使える入口（鍵の登録と照合、セッションと TOTP の管理、ログアウト）
 const PENDING_ROUTES = new Set([
   'GET /v1/me',
+  'PUT /v1/me/keys',
   'POST /v1/auth/logout',
   'POST /v1/auth/totp',
   'GET /v1/me/sessions',
