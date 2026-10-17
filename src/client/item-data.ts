@@ -26,16 +26,18 @@ function validDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
-function checkField(value: unknown): void {
+function checkField(value: unknown): CustomField {
   if (!record(value) || !exactKeys(value, ['type', 'label', 'value']) ||
-      !['text', 'hidden', 'date'].includes(String(value.type)) ||
+      (value.type !== 'text' && value.type !== 'hidden' && value.type !== 'date') ||
       typeof value.label !== 'string' || value.label.trim().length === 0 ||
       typeof value.value !== 'string') throw new TypeError('invalid custom field');
   if (value.type === 'date' && !validDate(value.value)) throw new TypeError('invalid date');
+  return { type: value.type, label: value.label, value: value.value };
 }
 
 export function validateItem(value: unknown): ClientItem {
   if (!record(value) || typeof value.title !== 'string' || value.title.trim().length === 0) throw new TypeError('invalid item');
+  let checked: ClientItem;
   if (value.type === 'login') {
     if (!exactKeys(value, ['type', 'title', 'username', 'password', 'urls', 'notes', 'customFields']) ||
         typeof value.username !== 'string' || typeof value.password !== 'string' || typeof value.notes !== 'string' ||
@@ -44,10 +46,12 @@ export function validateItem(value: unknown): ClientItem {
           try { originForSavedUrl(url); return true; } catch { return false; }
         }) ||
         !Array.isArray(value.customFields) || value.customFields.length > MAX_CUSTOM_FIELDS) throw new TypeError('invalid login');
-    value.customFields.forEach(checkField);
+    checked = { type: 'login', title: value.title, username: value.username, password: value.password,
+      urls: [...value.urls] as string[], notes: value.notes, customFields: value.customFields.map(checkField) };
   } else if (value.type === 'note') {
     if (!exactKeys(value, ['type', 'title', 'body']) || typeof value.body !== 'string') throw new TypeError('invalid note');
+    checked = { type: 'note', title: value.title, body: value.body };
   } else throw new TypeError('invalid item type');
-  if (new TextEncoder().encode(JSON.stringify(value)).length > MAX_ITEM_JSON_BYTES) throw new RangeError('item too large');
-  return value as ClientItem;
+  if (new TextEncoder().encode(JSON.stringify(checked)).length > MAX_ITEM_JSON_BYTES) throw new RangeError('item too large');
+  return checked;
 }

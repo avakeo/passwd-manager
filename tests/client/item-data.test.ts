@@ -28,3 +28,20 @@ test('I-01 UTF-8のJSONを最大65532バイトで制限', () => {
   assert.equal(validateItem({ type: 'note', title: '短い', body: 'あ'.repeat(1000) }).type, 'note');
 });
 
+test('I-02 検査した値だけを新しいオブジェクトと配列へ写す', () => {
+  const input = structuredClone(login);
+  const checked = validateItem(input) as LoginItem;
+  assert.deepEqual(checked, input);
+  assert.ok(checked !== input);
+  assert.ok(checked.urls !== input.urls);
+  assert.ok(checked.customFields !== input.customFields);
+  assert.ok(checked.customFields[0] !== input.customFields[0]);
+  const note = { type: 'note', title: 'Memo', body: 'text' };
+  assert.ok(validateItem(note) !== note);
+});
+
+test('I-02 Stringオブジェクトなど文字列以外のカスタム項目の種類は拒否する', () => {
+  assert.throws(() => validateItem({ ...login, customFields: [{ type: new String('hidden'), label: 'PIN', value: '1234' }] }));
+  assert.throws(() => validateItem({ ...login, customFields: [{ type: 'hidden', label: new String('PIN'), value: '1234' }] }));
+});
+
