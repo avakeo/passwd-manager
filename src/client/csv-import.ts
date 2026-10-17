@@ -3,7 +3,7 @@ import { validateItem, type LoginItem } from './item-data.ts';
 
 export type CsvFormat = 'chrome' | 'proton' | '1password';
 export type CsvIssue = { row: number; reason: string };
-export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boolean }[]; errors: CsvIssue[]; warnings: CsvIssue[] };
+export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boolean; passwordChangedFromExisting: boolean }[]; errors: CsvIssue[]; warnings: CsvIssue[] };
 
 type ParsedRow = { row: number; cells: string[] };
 
@@ -82,6 +82,13 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
   if (!header) throw new TypeError('CSV header missing');
   const map = columns(format, header.cells);
   const seen = new Set(existing.map(duplicateKey));
+  const existingPasswords = new Map<string, Set<string>>();
+  for (const item of existing) {
+    const key = duplicateKey(item);
+    const passwords = existingPasswords.get(key) ?? new Set<string>();
+    passwords.add(item.password);
+    existingPasswords.set(key, passwords);
+  }
   const items: CsvPreview['items'] = [];
   const warnings: CsvIssue[] = [];
   const supported = new Set(Object.values(map));
@@ -99,7 +106,8 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
       };
       validateItem(item);
       const key = duplicateKey(item);
-      items.push({ row: entry.row, item, duplicate: seen.has(key) });
+      const passwords = existingPasswords.get(key);
+      items.push({ row: entry.row, item, duplicate: seen.has(key), passwordChangedFromExisting: passwords !== undefined && !passwords.has(item.password) });
       seen.add(key);
       if (entry.cells.some((cell, index) => !supported.has(index) && cell.length > 0)) {
         warnings.push({ row: entry.row, reason: 'unsupported columns have values' });

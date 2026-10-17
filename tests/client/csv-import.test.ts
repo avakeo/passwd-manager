@@ -39,3 +39,14 @@ test('M-03 閉じ忘れの引用符を報告し、次の物理行の正常な行
   assert.deepEqual(result.items.map((x) => x.item.title), ['Good']);
 });
 
+test('M-02 既存アイテムとの重複でパスワード変更の有無を返す', () => {
+  const existing = [{ type: 'login' as const, title: 'Wiki', username: 'team', password: 'old', urls: ['https://wiki.example.com/login'], notes: '', customFields: [] }];
+  const csv = 'name,url,username,password\nWiki,https://wiki.example.com/login,team,old\nWiki,https://wiki.example.com/login,team,new\nOther,https://other.example.com,team,new\n';
+  const result = importCsvPreview(csv, 'chrome', existing);
+  assert.deepEqual(result.items.map(({ duplicate, passwordChangedFromExisting }) => ({ duplicate, passwordChangedFromExisting })), [
+    { duplicate: true, passwordChangedFromExisting: false },
+    { duplicate: true, passwordChangedFromExisting: true },
+    { duplicate: false, passwordChangedFromExisting: false },
+  ]);
+});
+
