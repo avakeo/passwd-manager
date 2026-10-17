@@ -4,7 +4,7 @@
 
 import { after, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fakeCiphertext, setup } from '../helpers/api.ts';
+import { DEFAULT_TOTP_SECRET, fakeCiphertext, setup } from '../helpers/api.ts';
 import { FakeDiscord } from '../helpers/fake-discord.ts';
 import { TEST_ENV } from '../helpers/api.ts';
 import { referenceTotp, stepAt } from '../helpers/totp-reference.ts';
@@ -21,101 +21,88 @@ const restore = new FakeDiscord({
 }).install();
 after(restore);
 
-export const STATES = ['未ログイン', 'TOTP 待ち', '承認待ち', 'メンバー', '管理者（TOTP 未登録）', '管理者', '削除済み', 'Web 用（メンバー）'] as const;
+// TOTP は全員必須。「TOTP 未登録」の3つは、登録するまで TOTP の登録とログアウトしかできない（A-11）
+export const STATES = [
+  '未ログイン',
+  'TOTP 待ち',
+  'TOTP 未登録（承認待ち）',
+  'TOTP 未登録（メンバー）',
+  'TOTP 未登録（管理者）',
+  '承認待ち',
+  'メンバー',
+  '管理者',
+  '削除済み',
+  'Web 用（メンバー）',
+] as const;
 type State = (typeof STATES)[number];
 
 // ok：許可（401・403 にならない）。数字：その番号で拒否
 type Cell = 'ok' | 400 | 401 | 403;
+type Ctx = { sessionId: string; itemId: string; code: string; registered: boolean };
 type Row = { name: string; method: string; path: (ctx: Ctx) => string; body?: (ctx: Ctx) => unknown; expect: Record<State, Cell> };
-type Ctx = { sessionId: string; itemId: string; code: string };
 
-const ALL_OK_MEMBER: Pick<Record<State, Cell>, 'メンバー' | '管理者'> = { メンバー: 'ok', 管理者: 'ok' };
+// マスは STATES の順に並べる
+function cells(...values: Cell[]): Record<State, Cell> {
+  assert.equal(values.length, STATES.length);
+  return Object.fromEntries(STATES.map((s, i) => [s, values[i]!])) as Record<State, Cell>;
+}
 
+//                                 未ログイン TOTP待ち 未登録:承認待ち メンバー 管理者  承認待ち  メンバー 管理者 削除済み Web用
 export const ROWS: Row[] = [
-  {
-    name: 'POST /v1/auth/logout',
-    method: 'POST',
-    path: () => '/v1/auth/logout',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 'ok', 削除済み: 403, 'Web 用（メンバー）': 403 },
-  },
-  {
-    name: 'GET /v1/me',
-    method: 'GET',
-    path: () => '/v1/me',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 'ok' },
-  },
-  {
-    name: 'GET /v1/me/sessions',
-    method: 'GET',
-    path: () => '/v1/me/sessions',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 'ok' },
-  },
+  { name: 'POST /v1/auth/logout', method: 'POST', path: () => '/v1/auth/logout', expect: cells(401, 401, 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 403, 403) },
+  { name: 'GET /v1/me', method: 'GET', path: () => '/v1/me', expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 'ok') },
+  { name: 'GET /v1/me/sessions', method: 'GET', path: () => '/v1/me/sessions', expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 'ok') },
   {
     name: 'DELETE /v1/me/sessions/{id}',
     method: 'DELETE',
     path: (c) => `/v1/me/sessions/${c.sessionId}`,
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 403),
   },
   {
-    name: 'POST /v1/me/totp',
+    // 登録済みの人は作り直し（今のコードを付ける）
+    name: 'POST /v1/me/totp（登録、登録済みなら作り直し）',
     method: 'POST',
     path: () => '/v1/me/totp',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 'ok', 削除済み: 403, 'Web 用（メンバー）': 403 },
+    body: (c) => (c.registered ? { code: c.code } : undefined),
+    expect: cells(401, 401, 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 403, 403),
   },
   {
     name: 'POST /v1/me/totp/confirm',
     method: 'POST',
     path: () => '/v1/me/totp/confirm',
     body: () => ({ code: '000000' }),
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 'ok', 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(401, 401, 'ok', 'ok', 'ok', 'ok', 'ok', 'ok', 403, 403),
   },
   {
-    name: 'DELETE /v1/me/totp',
-    method: 'DELETE',
-    path: () => '/v1/me/totp',
-    body: (c) => ({ code: c.code }),
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 'ok', メンバー: 'ok', '管理者（TOTP 未登録）': 403, 管理者: 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
-  },
-  {
+    // 未ログインは Bearer がないので一時トークンの形として読み、challenge_token がないので 400
     name: 'POST /v1/auth/totp（再確認、Bearer 付き）',
     method: 'POST',
     path: () => '/v1/auth/totp',
     body: (c) => ({ code: c.code }),
-    // 未ログインは Bearer がないので一時トークンの形として読み、challenge_token がないので 400
-    expect: { 未ログイン: 400, 'TOTP 待ち': 401, 承認待ち: 'ok', ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(400, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 403),
   },
-  {
-    name: 'GET /v1/vault',
-    method: 'GET',
-    path: () => '/v1/vault',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 403, ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 'ok' },
-  },
-  {
-    name: 'GET /v1/items',
-    method: 'GET',
-    path: () => '/v1/items?since=0',
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 403, ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 'ok' },
-  },
+  { name: 'GET /v1/vault', method: 'GET', path: () => '/v1/vault', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 'ok') },
+  { name: 'GET /v1/items', method: 'GET', path: () => '/v1/items?since=0', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 'ok') },
   {
     name: 'POST /v1/items',
     method: 'POST',
     path: () => '/v1/items',
     body: () => ({ id: `item_${'B'.repeat(22)}`, vault_key_version: 1, ciphertext: fakeCiphertext() }),
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 403, ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
   },
   {
     name: 'PUT /v1/items/{id}',
     method: 'PUT',
     path: (c) => `/v1/items/${c.itemId}`,
     body: () => ({ revision: 1, vault_key_version: 1, ciphertext: fakeCiphertext() }),
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 403, ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
   },
   {
     name: 'DELETE /v1/items/{id}',
     method: 'DELETE',
     path: (c) => `/v1/items/${c.itemId}`,
     body: () => ({ revision: 1 }),
-    expect: { 未ログイン: 401, 'TOTP 待ち': 401, 承認待ち: 403, ...ALL_OK_MEMBER, '管理者（TOTP 未登録）': 403, 削除済み: 403, 'Web 用（メンバー）': 403 },
+    expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
   },
 ];
 
@@ -139,28 +126,29 @@ for (const row of ROWS) {
       const owner = await t.addMember('active');
       const itemId = `item_${'A'.repeat(22)}`;
       await t.request('POST', '/v1/items', owner.token, { id: itemId, vault_key_version: 1, ciphertext: fakeCiphertext() });
-      const secret = new Uint8Array(20).fill(9);
+      const registered = !state.startsWith('TOTP 未登録');
       let token: string | undefined;
       let sessionId = 'session_none';
       if (state === 'TOTP 待ち') {
         // ログインの途中の一時トークンを、Bearer として使おうとする
-        const m = await t.addMember('active', { totpSecret: secret });
+        const m = await t.addMember('active');
         token = 'challenge_' + m.token.slice(10); // セッションの表にないトークン
         t.db.db
           .prepare(`INSERT INTO auth_challenges (id, member_id, challenge_hash, scope, device_label, created_at, expires_at) VALUES ('ch_1', ?, 'h', 'extension', 'x', ?, ?)`)
           .run(m.id, T0, T0 + 300000);
       } else if (state !== '未ログイン') {
-        const m = await t.addMember(state === '承認待ち' ? 'pending' : state === '削除済み' ? 'removed' : 'active', {
-          role: state.startsWith('管理者') ? 'admin' : 'member',
+        const pending = state === '承認待ち' || state === 'TOTP 未登録（承認待ち）';
+        const m = await t.addMember(pending ? 'pending' : state === '削除済み' ? 'removed' : 'active', {
+          role: state === '管理者' || state === 'TOTP 未登録（管理者）' ? 'admin' : 'member',
           scope: state === 'Web 用（メンバー）' ? 'web' : 'extension',
-          totpSecret: state === '管理者（TOTP 未登録）' || state === '承認待ち' ? undefined : secret,
+          totpSecret: registered ? DEFAULT_TOTP_SECRET : null,
         });
         token = m.token;
         const other = await t.addSession(m.id, { scope: state === 'Web 用（メンバー）' ? 'web' : 'extension' });
         sessionId = other.sessionId;
       }
-      // 承認待ちの人は TOTP を持たないので、TOTP の行は「登録していない」応答（409 など）になるが、401・403 にはならない
-      const ctx: Ctx = { sessionId, itemId, code: referenceTotp(secret, stepAt(T0)) };
+      // TOTP の行は、中身によって 409 などになることがあるが、許可のマスでは 401・403 にはならない
+      const ctx: Ctx = { sessionId, itemId, code: referenceTotp(DEFAULT_TOTP_SECRET, stepAt(T0)), registered };
       const res = await t.request(row.method, row.path(ctx), token, row.body?.(ctx));
       const expected = row.expect[state];
       if (expected === 'ok') assert.ok(res.status !== 401 && res.status !== 403, `${state}：許可のはずが ${res.status}`);

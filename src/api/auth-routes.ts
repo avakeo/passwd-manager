@@ -1,6 +1,7 @@
 // ログイン、セッションの更新・ログアウト・一覧・無効化、TOTP。仕様書「認証・認可フロー」「エンドポイント」。
 //   POST /v1/auth/discord、POST /v1/auth/refresh、POST /v1/auth/totp、POST /v1/auth/logout、
-//   GET /v1/me/sessions、DELETE /v1/me/sessions/{id}、POST /v1/me/totp、POST /v1/me/totp/confirm、DELETE /v1/me/totp
+//   GET /v1/me/sessions、DELETE /v1/me/sessions/{id}、POST /v1/me/totp、POST /v1/me/totp/confirm
+// TOTP は全員必須。解除はできず、作り直し（今のコードを確かめてから新しいシークレットに替える）だけができる。
 // トークンは乱数32バイト。D1 には SHA-256 だけを置き、応答で一度だけ生の値を返す。ログは出さない。
 
 import type { Hono } from 'hono';
@@ -153,8 +154,8 @@ export function registerAuthRoutes(app: Hono<Env>): void {
       return c.json({ status: 'totp_required', challenge_token: challenge, challenge_expires_at: now + CHALLENGE_TTL_MS, member: memberView(m) });
     }
     const session = await issueSession(db, m.id, 'extension', label, null);
-    // 管理者は TOTP が必須。登録するまでは、TOTP の登録とログアウトしかできない（A-11）
-    return c.json({ status: m.role === 'admin' ? 'totp_setup_required' : 'ok', ...session, member: memberView(m) });
+    // TOTP は全員必須。登録するまでは、TOTP の登録とログアウトしかできない（A-11）
+    return c.json({ status: 'totp_setup_required', ...session, member: memberView(m) });
   });
 
   // セッションの更新（公開。リフレッシュトークンを本文で受け取る）
@@ -221,13 +222,17 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     return c.body(null, 204);
   });
 
-  // TOTP の登録の開始。シークレットは、コードで確定するまで登録途中の列に置く
+  // TOTP の登録の開始。シークレットは、コードで確定するまで登録途中の列に置く。
+  // 登録済みなら作り直し：今のコードを確かめてから始める。確定するまでは今のシークレットのまま
   app.post('/v1/me/totp', async (c) => {
     const p = c.get('principal');
     const db = c.env.DB;
     const m = await db.prepare('SELECT display_name, totp_secret_encrypted AS s FROM members WHERE id = ?').bind(p.memberId).first<{ display_name: string; s: string | null }>();
     if (!m) throw new HttpProblem(404);
-    if (m.s !== null) throw new HttpProblem(409);
+    if (m.s !== null) {
+      const body = await readJson(c.req.raw, ['code']);
+      if ((await checkMemberCode(c.env, p.memberId, body.code)) !== true) throw new HttpProblem(403);
+    }
     const secret = newTotpSecret();
     try {
       await db.prepare('UPDATE members SET totp_pending_secret_encrypted = ? WHERE id = ?').bind(await encryptTotpSecret(c.env.TOTP_ENCRYPTION_KEY, p.memberId, secret, 'totp-pending-secret'), p.memberId).run();
@@ -237,13 +242,13 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     }
   });
 
-  // TOTP の登録の確定。回復コードは、ここで一度だけ返す
+  // TOTP の登録（作り直しを含む）の確定。回復コードは、ここで一度だけ返す（作り直しでは新しくする）
   app.post('/v1/me/totp/confirm', async (c) => {
     const p = c.get('principal');
     const db = c.env.DB;
     const body = await readJson(c.req.raw, ['code']);
     const m = await db.prepare('SELECT totp_secret_encrypted AS s, totp_pending_secret_encrypted AS pending FROM members WHERE id = ?').bind(p.memberId).first<{ s: string | null; pending: string | null }>();
-    if (!m || m.s !== null || m.pending === null) throw new HttpProblem(409);
+    if (!m || m.pending === null) throw new HttpProblem(409);
     const now = Date.now();
     await takeAttempt(db, p.memberId, now);
     const secret = await decryptTotpSecret(c.env.TOTP_ENCRYPTION_KEY, p.memberId, m.pending, 'totp-pending-secret');
@@ -258,34 +263,17 @@ export function registerAuthRoutes(app: Hono<Env>): void {
           .prepare(
             `UPDATE members SET totp_secret_encrypted = ?, totp_pending_secret_encrypted = NULL, totp_last_step = ?, recovery_code_hashes = ?,
                     totp_failed_count = 0, totp_failed_at = NULL
-              WHERE id = ? AND totp_secret_encrypted IS NULL AND totp_pending_secret_encrypted = ?`,
+              WHERE id = ? AND totp_pending_secret_encrypted = ?`,
           )
           .bind(encrypted, step, JSON.stringify(hashes), p.memberId, m.pending),
         // 登録したセッションは、TOTP を確かめた扱い
         db.prepare('UPDATE sessions SET totp_verified_at = ? WHERE id = ? AND changes() = 1').bind(now, p.sessionId),
       ]);
       if (results[0]!.meta.changes !== 1) throw new HttpProblem(409);
-      await audit(db, p.memberId, 'totp.register');
+      await audit(db, p.memberId, m.s === null ? 'totp.register' : 'totp.reset');
       return c.json({ recovery_codes: codes });
     } finally {
       wipe(secret);
     }
-  });
-
-  // TOTP の解除。管理者はできない。今のコードが要る
-  app.delete('/v1/me/totp', async (c) => {
-    const p = c.get('principal');
-    if (p.role === 'admin') throw new HttpProblem(403);
-    const body = await readJson(c.req.raw, ['code']);
-    const ok = await checkMemberCode(c.env, p.memberId, body.code);
-    if (ok === null) throw new HttpProblem(409);
-    if (!ok) throw new HttpProblem(403);
-    await c.env.DB.prepare(
-      `UPDATE members SET totp_secret_encrypted = NULL, totp_pending_secret_encrypted = NULL, totp_last_step = NULL, recovery_code_hashes = NULL WHERE id = ?`,
-    )
-      .bind(p.memberId)
-      .run();
-    await audit(c.env.DB, p.memberId, 'totp.remove');
-    return c.body(null, 204);
   });
 }

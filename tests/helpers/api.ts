@@ -23,6 +23,9 @@ export const TEST_ENV = {
   TOTP_ENCRYPTION_KEY: toBase64Url(new Uint8Array(32).fill(7)),
 };
 
+// addMember が既定で登録する TOTP のシークレット（TOTP は全員必須なので、既定で登録済みにする）
+export const DEFAULT_TOTP_SECRET = new Uint8Array(20).fill(0x33);
+
 async function sha256Hex(s: string): Promise<string> {
   return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))));
 }
@@ -42,7 +45,7 @@ export function setup() {
       role?: 'admin' | 'member';
       scope?: 'extension' | 'web';
       discordUserId?: string;
-      totpSecret?: Uint8Array<ArrayBuffer>; // 渡すと、TOTP を登録済みにする
+      totpSecret?: Uint8Array<ArrayBuffer> | null; // 既定は DEFAULT_TOTP_SECRET で登録済み。null なら TOTP を登録していない
       totpVerifiedAt?: number | null;
     } = {},
   ) {
@@ -51,10 +54,11 @@ export function setup() {
     db.db
       .prepare(`INSERT INTO members (id, discord_user_id, display_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 0)`)
       .run(id, opts.discordUserId ?? `90000000000000${String(n).padStart(4, '0')}`, `メンバー${n}`, opts.role ?? 'member', status);
-    if (opts.totpSecret) {
+    const totpSecret = opts.totpSecret === undefined ? DEFAULT_TOTP_SECRET : opts.totpSecret;
+    if (totpSecret !== null) {
       db.db
         .prepare(`UPDATE members SET totp_secret_encrypted = ? WHERE id = ?`)
-        .run(await encryptTotpSecret(TEST_ENV.TOTP_ENCRYPTION_KEY, id, opts.totpSecret, 'totp-secret'), id);
+        .run(await encryptTotpSecret(TEST_ENV.TOTP_ENCRYPTION_KEY, id, totpSecret, 'totp-secret'), id);
     }
     const session = await addSession(id, { scope: opts.scope, totpVerifiedAt: opts.totpVerifiedAt });
     return { id, ...session };

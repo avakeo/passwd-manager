@@ -66,25 +66,25 @@ const PENDING_ROUTES = new Set([
   'DELETE /v1/me/sessions/:id',
   'POST /v1/me/totp',
   'POST /v1/me/totp/confirm',
-  'DELETE /v1/me/totp',
 ]);
 
-// TOTP を登録していない管理者が使える入口。管理操作だけでなく、読み書きも GET /v1/me もできない（A-11）
-const ADMIN_SETUP_ROUTES = new Set(['POST /v1/me/totp', 'POST /v1/me/totp/confirm', 'POST /v1/auth/logout']);
+// TOTP は全員必須。登録していない人が使える入口。管理操作だけでなく、読み書きも GET /v1/me もできない（A-11）
+const TOTP_SETUP_ROUTES = new Set(['POST /v1/me/totp', 'POST /v1/me/totp/confirm', 'POST /v1/auth/logout']);
 
 export function routeKey(method: string, path: string): string {
   const p = path.replace(/^\/v1\/me\/sessions\/[^/]+$/, '/v1/me/sessions/:id').replace(/^\/v1\/items\/[^/]+$/, '/v1/items/:id');
   return `${method} ${p}`;
 }
 
-// 何をしてよいか。順に：削除済み → Web 用は読み取りだけ → TOTP 未登録の管理者 → 承認待ち。
+// 何をしてよいか。順に：削除済み → Web 用は読み取りだけ → TOTP 未登録 → 承認待ち。
 export function authorize(p: Principal, method: string, path: string): void {
   const key = routeKey(method, path);
   // D1 で承認済み（active）でなければ、削除済みは 403（Z-06）
   if (p.status === 'removed') throw new HttpProblem(403);
   // Web ページ用のトークンは読み取り専用（Z-07）
   if (p.scope === 'web' && method !== 'GET' && method !== 'HEAD') throw new HttpProblem(403);
-  if (p.role === 'admin' && !p.hasTotp && !ADMIN_SETUP_ROUTES.has(key)) throw new HttpProblem(403);
+  // セッションではなくメンバーの状態で決める（登録前に発行したセッションでも、登録すれば使える）
+  if (!p.hasTotp && !TOTP_SETUP_ROUTES.has(key)) throw new HttpProblem(403);
   // 承認待ちは、決めた入口だけ（Z-01）
   if (p.status === 'pending' && !PENDING_ROUTES.has(key)) throw new HttpProblem(403);
 }

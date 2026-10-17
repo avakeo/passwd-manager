@@ -66,12 +66,21 @@ function dump(t: Setup): string {
   return JSON.stringify(tables.map((name) => t.db.db.prepare(`SELECT * FROM ${name}`).all()));
 }
 
-test('初めてのログインで、承認待ちのメンバーができ、セッションが発行される（承認待ちは /v1/me だけを使える）', async () => {
+// TOTP を登録する（拡張機能と同じ道筋：登録の開始 → 認証アプリのコードで確定）
+async function registerTotp(t: Setup, accessToken: string) {
+  const reg = (await (await t.request('POST', '/v1/me/totp', accessToken)).json()) as { secret: string };
+  const secret = base32ToBytes(reg.secret);
+  const confirm = await t.request('POST', '/v1/me/totp/confirm', accessToken, { code: referenceTotp(secret, stepAt(Date.now())) });
+  assert.equal(confirm.status, 200);
+  return { secret, recoveryCodes: ((await confirm.json()) as { recovery_codes: string[] }).recovery_codes };
+}
+
+test('初めてのログインで、承認待ちのメンバーができ、TOTP の登録を求められる（登録した後、承認待ちは /v1/me だけを使える）', async () => {
   const t = setup();
   const userId = newDiscordUser([ROLE, '999']);
   const { res, body } = await login(t, userId);
   assert.equal(res.status, 200);
-  assert.equal(body.status, 'ok');
+  assert.equal(body.status, 'totp_setup_required');
   assert.match(body.access_token!, /^[A-Za-z0-9_-]{43}$/);
   assert.match(body.refresh_token!, /^[A-Za-z0-9_-]{43}$/);
   assert.deepEqual({ role: body.member!.role, status: body.member!.status }, { role: 'member', status: 'pending' });
@@ -80,6 +89,9 @@ test('初めてのログインで、承認待ちのメンバーができ、セ�
   // 2回目のログインでは、行を増やさない
   await login(t, userId);
   assert.equal(count(t, 'members'), 1);
+  // TOTP の登録の前は、/v1/me も 403
+  assert.equal((await t.request('GET', '/v1/me', body.access_token)).status, 403);
+  await registerTotp(t, body.access_token!);
   // 承認待ち：/v1/me は使えるが、Vault とアイテムは 403（Z-01）
   assert.notEqual((await t.request('GET', '/v1/me', body.access_token)).status, 403);
   assert.equal((await t.request('GET', '/v1/vault', body.access_token)).status, 403);
@@ -88,12 +100,15 @@ test('初めてのログインで、承認待ちのメンバーができ、セ�
   assert.ok(!dump(t).includes(body.access_token!) && !dump(t).includes(body.refresh_token!));
 });
 
-test('承認済みのメンバーのログインでは、Vault もアイテムも使えるセッションが発行される', async () => {
+test('承認済みのメンバーのログインでは、TOTP を確かめてから、Vault もアイテムも使えるセッションが発行される', async () => {
   const t = setup();
   const userId = newDiscordUser();
   const first = await login(t, userId);
+  const { secret } = await registerTotp(t, first.body.access_token!);
   t.db.db.prepare(`UPDATE members SET status = 'active' WHERE id = ?`).run(first.body.member!.id);
-  const { body } = await login(t, userId);
+  mock.timers.setTime(T0 + 30_000);
+  const { body } = await totpLogin(t, userId, referenceTotp(secret, stepAt(T0 + 30_000)));
+  mock.timers.setTime(T0);
   assert.equal(body.member!.status, 'active');
   assert.equal((await t.request('GET', '/v1/items?since=0', body.access_token)).status, 200);
 });
@@ -193,6 +208,14 @@ test('削除済みのメンバーは、ロールを持っていてもログイ�
   assert.equal((await login(t, userId)).res.status, 403);
 });
 
+// TOTP を登録した承認済みのメンバーとしてログインし、使えるセッションを得る
+async function loginWithTotp(t: Setup) {
+  const m = await memberWithTotp(t);
+  const r = await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(Date.now())));
+  assert.equal(r.res.status, 200);
+  return r;
+}
+
 async function refresh(t: Setup, refreshToken: string) {
   const res = await t.request('POST', '/v1/auth/refresh', undefined, { refresh_token: refreshToken });
   return { res, body: (await res.clone().json()) as LoginBody };
@@ -200,7 +223,7 @@ async function refresh(t: Setup, refreshToken: string) {
 
 test('更新：アクセストークンとリフレッシュトークンが新しくなり、古いアクセストークンは 401', async () => {
   const t = setup();
-  const { body } = await login(t, newDiscordUser());
+  const { body } = await loginWithTotp(t);
   const r = await refresh(t, body.refresh_token!);
   assert.equal(r.res.status, 200);
   assert.notEqual(r.body.access_token, body.access_token);
@@ -250,7 +273,7 @@ test('A-12 2回以上更新した後に、最初のリフレッシュトーク�
   assert.equal((await t.request('GET', '/v1/me/sessions', r3.body.access_token)).status, 401);
   assert.equal((await refresh(t, r3.body.refresh_token!)).res.status, 401);
   // 別の人のセッションは巻き込まない
-  const other = await login(t, newDiscordUser());
+  const other = await loginWithTotp(t);
   assert.equal((await t.request('GET', '/v1/me/sessions', other.body.access_token)).status, 200);
 });
 
@@ -457,7 +480,7 @@ test('A-08 成功したら失敗の回数を戻す（4回失敗して成功し�
 
 test('A-08 TOTP の登録の確定でも、同時に送ったコードは5回までしか試せない', async () => {
   const t = setup();
-  const m = await t.addMember('active');
+  const m = await t.addMember('active', { totpSecret: null });
   await t.request('POST', '/v1/me/totp', m.token);
   const results = await Promise.all(Array.from({ length: 20 }, () => t.request('POST', '/v1/me/totp/confirm', m.token, { code: '000000' })));
   const statuses = results.map((r) => r.status);
@@ -469,11 +492,8 @@ test('回復コードは1回だけ使える', async () => {
   const t = setup();
   // 拡張機能から登録して、回復コードを受け取る
   const userId = newDiscordUser();
-  const m = await t.addMember('active', { discordUserId: userId });
-  const reg = (await (await t.request('POST', '/v1/me/totp', m.token)).json()) as { secret: string };
-  const secret = base32ToBytes(reg.secret);
-  const confirm = await t.request('POST', '/v1/me/totp/confirm', m.token, { code: referenceTotp(secret, stepAt(T0)) });
-  const { recovery_codes } = (await confirm.json()) as { recovery_codes: string[] };
+  const m = await t.addMember('active', { discordUserId: userId, totpSecret: null });
+  const { recoveryCodes: recovery_codes } = await registerTotp(t, m.token);
   assert.equal((await totpLogin(t, userId, { recovery: recovery_codes[0]! })).res.status, 200);
   assert.equal((await totpLogin(t, userId, { recovery: recovery_codes[0]! })).res.status, 401, '2回目');
   assert.equal((await totpLogin(t, userId, { recovery: recovery_codes[1]!.toLowerCase() })).res.status, 200, '別のコードは使える');
@@ -486,7 +506,8 @@ test('回復コードは1回だけ使える', async () => {
 
 test('TOTP の登録：登録途中のシークレットはコードで確定するまで使わない。D1 の暗号文は先頭に形式とアルゴリズムID を持つ', async () => {
   const t = setup();
-  const m = await t.addMember('active');
+  const userId = newDiscordUser();
+  const m = await t.addMember('active', { discordUserId: userId, totpSecret: null });
   const r1 = await t.request('POST', '/v1/me/totp', m.token);
   assert.equal(r1.status, 200);
   const reg = (await r1.json()) as { secret: string; otpauth_uri: string };
@@ -505,43 +526,61 @@ test('TOTP の登録：登録途中のシークレットはコードで確定す
   assert.equal(((await ok.json()) as { recovery_codes: string[] }).recovery_codes.length, 10);
   const active = fromBase64Url(String(t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s));
   assert.deepEqual([active[0], active[1]], [0x01, 0x01]);
-  // 登録済みならもう一度は始められない
-  assert.equal((await t.request('POST', '/v1/me/totp', m.token)).status, 409);
-  // メンバーは解除できる（今のコードが要る）。管理者は解除できない
-  assert.equal((await t.request('DELETE', '/v1/me/totp', m.token, { code: '000000' })).status, 403);
-  mock.timers.setTime(T0 + 30_000);
-  assert.equal((await t.request('DELETE', '/v1/me/totp', m.token, { code: referenceTotp(secret, stepAt(T0 + 30_000)) })).status, 204);
   mock.timers.setTime(T0);
-  assert.equal(t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s, null);
-  const admin = await memberWithTotp(t, 'admin');
-  assert.equal((await t.request('DELETE', '/v1/me/totp', admin.token, { code: referenceTotp(admin.secret, stepAt(T0)) })).status, 403);
 });
 
-test('A-11 TOTP を登録していない管理者は、ログインで登録を求められ、登録するまで管理操作も読み書きもできない', async () => {
+test('TOTP の作り直し：今のコードを確かめてから新しいシークレットに替える。確定するまでは今のシークレットのまま。解除はできない', async () => {
   const t = setup();
-  const userId = newDiscordUser();
-  const first = await login(t, userId);
-  t.db.db.prepare(`UPDATE members SET role = 'admin', status = 'active' WHERE id = ?`).run(first.body.member!.id);
-  const { body } = await login(t, userId);
-  assert.equal(body.status, 'totp_setup_required');
-  const token = body.access_token!;
-  for (const [method, path] of [
-    ['GET', '/v1/me'],
-    ['GET', '/v1/vault'],
-    ['GET', '/v1/items?since=0'],
-    ['GET', '/v1/me/sessions'],
-  ] as const) {
-    assert.equal((await t.request(method, path, token)).status, 403, `${method} ${path}`);
-  }
-  assert.equal((await t.request('POST', '/v1/items', token, { id: 'item_AAAAAAAAAAAAAAAAAAAAAA', vault_key_version: 1, ciphertext: 'AQE' })).status, 403);
-  // 登録はできる
-  const reg = (await (await t.request('POST', '/v1/me/totp', token)).json()) as { secret: string };
-  const secret = base32ToBytes(reg.secret);
-  assert.equal((await t.request('POST', '/v1/me/totp/confirm', token, { code: referenceTotp(secret, stepAt(T0)) })).status, 200);
-  // 登録した後は使える。登録したセッションは TOTP を確かめた扱い
-  assert.equal((await t.request('GET', '/v1/items?since=0', token)).status, 200);
-  assert.equal(await verifiedAt(t, token), T0);
+  const m = await memberWithTotp(t);
+  const before = t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s;
+  // 今のコードがなければ始められない
+  assert.equal((await t.request('POST', '/v1/me/totp', m.token)).status, 400);
+  assert.equal((await t.request('POST', '/v1/me/totp', m.token, { code: '000000' })).status, 403);
+  const r = await t.request('POST', '/v1/me/totp', m.token, { code: referenceTotp(m.secret, stepAt(T0)) });
+  assert.equal(r.status, 200);
+  const next = base32ToBytes(((await r.json()) as { secret: string }).secret);
+  assert.notDeepEqual(next, m.secret);
+  // 確定するまでは今のシークレットのまま
+  assert.equal(t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s, before);
+  mock.timers.setTime(T0 + 30_000);
+  const ok = await t.request('POST', '/v1/me/totp/confirm', m.token, { code: referenceTotp(next, stepAt(T0 + 30_000)) });
+  assert.equal(ok.status, 200);
+  assert.equal(((await ok.json()) as { recovery_codes: string[] }).recovery_codes.length, 10);
+  // 古いシークレットのコードは通らず、新しいシークレットのコードは通る
+  mock.timers.setTime(T0 + 60_000);
+  assert.equal((await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(T0 + 60_000)))).res.status, 401);
+  assert.equal((await totpLogin(t, m.userId, referenceTotp(next, stepAt(T0 + 60_000)))).res.status, 200);
+  mock.timers.setTime(T0);
+  // 解除のエンドポイントはない（管理者もメンバーも TOTP は必須）
+  assert.equal((await t.request('DELETE', '/v1/me/totp', m.token, { code: referenceTotp(m.secret, stepAt(T0)) })).status, 404);
+  assert.notEqual(t.db.db.prepare('SELECT totp_secret_encrypted AS s FROM members WHERE id = ?').get(m.id)!.s, null);
 });
+
+for (const role of ['admin', 'member'] as const) {
+  test(`A-11 TOTP を登録していない${role === 'admin' ? '管理者' : 'メンバー'}は、ログインで登録を求められ、登録するまで管理操作も読み書きもできない`, async () => {
+    const t = setup();
+    const userId = newDiscordUser();
+    const first = await login(t, userId);
+    t.db.db.prepare(`UPDATE members SET role = ?, status = 'active' WHERE id = ?`).run(role, first.body.member!.id);
+    const { body } = await login(t, userId);
+    assert.equal(body.status, 'totp_setup_required');
+    const token = body.access_token!;
+    for (const [method, path] of [
+      ['GET', '/v1/me'],
+      ['GET', '/v1/vault'],
+      ['GET', '/v1/items?since=0'],
+      ['GET', '/v1/me/sessions'],
+    ] as const) {
+      assert.equal((await t.request(method, path, token)).status, 403, `${method} ${path}`);
+    }
+    assert.equal((await t.request('POST', '/v1/items', token, { id: 'item_AAAAAAAAAAAAAAAAAAAAAA', vault_key_version: 1, ciphertext: 'AQE' })).status, 403);
+    // 登録はできる
+    await registerTotp(t, token);
+    // 登録した後は使える。登録したセッションは TOTP を確かめた扱い
+    assert.equal((await t.request('GET', '/v1/items?since=0', token)).status, 200);
+    assert.equal(await verifiedAt(t, token), T0);
+  });
+}
 
 test('ログインした後の TOTP の再確認（ステップアップ）で、セッションの確かめた時刻が新しくなる', async () => {
   const t = setup();
@@ -552,7 +591,7 @@ test('ログインした後の TOTP の再確認（ステップアップ）で�
   assert.equal((await t.request('POST', '/v1/auth/totp', s.token, { code: referenceTotp(m.secret, stepAt(T0 + 60_000)) })).status, 204);
   assert.equal(Number(t.db.db.prepare('SELECT totp_verified_at AS v FROM sessions WHERE id = ?').get(s.sessionId)!.v), T0 + 60_000);
   mock.timers.setTime(T0);
-  // TOTP を登録していないメンバーの再確認は 409
-  const plain = await t.addMember('active');
-  assert.equal((await t.request('POST', '/v1/auth/totp', plain.token, { code: '000000' })).status, 409);
+  // TOTP を登録していない人の再確認は 403（登録とログアウトしかできない）
+  const plain = await t.addMember('active', { totpSecret: null });
+  assert.equal((await t.request('POST', '/v1/auth/totp', plain.token, { code: '000000' })).status, 403);
 });
