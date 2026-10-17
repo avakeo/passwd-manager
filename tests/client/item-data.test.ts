@@ -18,7 +18,10 @@ test('I-02 項目の型、未知のプロパティ、日付の厳密さを検査
   assert.throws(() => validateItem({ ...login, customFields: [{ type: 'hidden', label: 'x', value: 123 }] }));
   assert.throws(() => validateItem({ ...login, surprise: true }));
   assert.throws(() => validateItem({ ...login, customFields: [...login.customFields, ...Array(20).fill(login.customFields[0])] }));
-  assert.throws(() => validateItem({ ...login, urls: ['https://wiki.example.com/path'] }));
+  assert.deepEqual(validateItem({ ...login, urls: ['https://wiki.example.com/path'] }), { ...login, urls: ['https://wiki.example.com/path'] });
+  for (const url of ['http://wiki.example.com', 'javascript:alert(1)', 'data:text/html,hi']) {
+    assert.throws(() => validateItem({ ...login, urls: [url] }));
+  }
 });
 test('I-01 UTF-8のJSONを最大65532バイトで制限', () => {
   assert.throws(() => validateItem({ type: 'note', title: '長い', body: 'あ'.repeat(22_000) }), /too large/i);

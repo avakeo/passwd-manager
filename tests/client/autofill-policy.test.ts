@@ -6,6 +6,7 @@ const ok = { popupInitiated: true, unlocked: true, topFrame: true, tabId: 7, exp
 test('E-01 E-04 URLはパスとクエリを捨て、HTTPSのオリジンとポートだけを比較', () => {
   assert.equal(originForSavedUrl('https://wiki.example.com:443/login?q=1'), 'https://wiki.example.com');
   assert.equal(canAutofill(ok), true);
+  assert.equal(canAutofill({ ...ok, savedOrigins: ['https://wiki.example.com/login?next=1'] }), true);
   assert.equal(canAutofill({ ...ok, savedOrigins: ['https://other.example.com', 'https://wiki.example.com'] }), true);
   assert.equal(canAutofill({ ...ok, savedOrigins: ['https://wiki.example.com:8443'] }), false);
   assert.equal(canAutofill({ ...ok, pageUrl: 'https://wiki.example.com:8443/login', livePageUrl: 'https://wiki.example.com:8443/login' }), false);

@@ -41,7 +41,7 @@ export function validateItem(value: unknown): ClientItem {
         typeof value.username !== 'string' || typeof value.password !== 'string' || typeof value.notes !== 'string' ||
         !Array.isArray(value.urls) || !value.urls.every((url: unknown) => {
           if (typeof url !== 'string') return false;
-          try { return originForSavedUrl(url) === url; } catch { return false; }
+          try { originForSavedUrl(url); return true; } catch { return false; }
         }) ||
         !Array.isArray(value.customFields) || value.customFields.length > MAX_CUSTOM_FIELDS) throw new TypeError('invalid login');
     value.customFields.forEach(checkField);

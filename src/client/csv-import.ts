@@ -94,7 +94,7 @@ export function importCsvPreview(csv: string, format: CsvFormat, existing: reado
       const url = value(map.url).trim();
       const item: LoginItem = {
         type: 'login', title: value(map.title), username: value(map.username),
-        password: value(map.password), urls: url ? [originForSavedUrl(url)] : [],
+        password: value(map.password), urls: url ? [url] : [],
         notes: value(map.notes), customFields: [],
       };
       validateItem(item);
