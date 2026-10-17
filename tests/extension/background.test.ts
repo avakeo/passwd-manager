@@ -32,7 +32,16 @@ const ADMIN_PASSWORD = 'admin-hoshi-sora-umi-42';
 const MEMBER_PASSWORD = 'member-kawa-mori-yama-18';
 let nextUser = 700000000000000000n;
 
-type World = { t: ReturnType<typeof setup>; chrome: FakeChrome; bg: Background; responses: string[] };
+type Gate = { arrived: Promise<void>; release: () => void };
+type World = {
+  t: ReturnType<typeof setup>;
+  chrome: FakeChrome;
+  bg: Background;
+  responses: string[];
+  calls: string[]; // 拡張機能が API に送った「メソッド パス」
+  gates: Map<string, { arrive: () => void; released: Promise<void> }>;
+  rewrite: ((call: string, res: Response) => Promise<Response> | null) | null;
+};
 type Reply = { ok: boolean; error?: string } & Record<string, unknown>;
 
 function world(): World {
@@ -40,7 +49,7 @@ function world(): World {
   // 本番と同じく、vault_meta の行は最初の Vault を作るときにできる
   t.db.db.exec('DELETE FROM vault_meta; DELETE FROM vault_key_versions');
   const chrome = new FakeChrome(discord);
-  const w: World = { t, chrome, bg: null as unknown as Background, responses: [] };
+  const w: World = { t, chrome, bg: null as unknown as Background, responses: [], calls: [], gates: new Map(), rewrite: null };
   w.bg = newBackground(w);
   return w;
 }
@@ -51,12 +60,32 @@ function newBackground(w: World): Background {
     chrome: w.chrome,
     apiOrigin: API_ORIGIN,
     discordClientId: TEST_ENV.DISCORD_CLIENT_ID,
-    fetch: (input, init) => {
+    fetch: async (input, init) => {
       const url = new URL(String(input));
       assert.equal(url.origin, API_ORIGIN, 'API の接続先にだけ送る');
-      return Promise.resolve(w.t.app.request(url.pathname + url.search, init, w.t.env));
+      const call = `${init.method ?? 'GET'} ${url.pathname}`;
+      // 止めておく呼び出し（同時に起きることを、決まった順で作る）
+      const gate = w.gates.get(call);
+      if (gate) {
+        w.gates.delete(call);
+        gate.arrive();
+        await gate.released;
+      }
+      w.calls.push(call);
+      const res = await w.t.app.request(url.pathname + url.search, init, w.t.env);
+      return (w.rewrite && (await w.rewrite(call, res))) || res;
     },
   });
+}
+
+// 次の call（例 'POST /v1/auth/refresh'）を、release を呼ぶまで API に届けない
+function hold(w: World, call: string): Gate {
+  let arrive!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>((r) => (arrive = r));
+  const released = new Promise<void>((r) => (release = r));
+  w.gates.set(call, { arrive, released });
+  return { arrived, release };
 }
 
 async function send(w: World, message: Record<string, unknown>, from = PAGE): Promise<Reply> {
@@ -199,6 +228,49 @@ test('アクセストークンが切れていても、リフレッシュトー�
   at(32 * MIN);
   assert.equal((await send(w, { type: 'listSessions' })).error, 'NOT_LOGGED_IN');
   assert.equal((await send(w, { type: 'status' }, POPUP)).loggedIn, false);
+});
+
+test('Codex #1 トークンが切れた状態で3つの API 呼び出しが同時に走っても、更新は1回で、ログアウトにならない', async () => {
+  const w = world();
+  await adminReady(w);
+  at(16 * MIN); // アクセストークンは15分
+  w.calls.length = 0;
+  const replies = await Promise.all([send(w, { type: 'listSessions' }), send(w, { type: 'listSessions' }), send(w, { type: 'listSessions' })]);
+  assert.deepEqual(replies.map((r) => r.ok), [true, true, true], JSON.stringify(replies));
+  assert.equal(w.calls.filter((c) => c === 'POST /v1/auth/refresh').length, 1, '更新は1回');
+  assert.equal(Number(w.t.db.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE revoked_at IS NOT NULL').get()!.n), 0, '使い回しの検知でセッションが無効になっていない');
+  assert.equal((await send(w, { type: 'status' }, POPUP)).loggedIn, true);
+});
+
+test('Codex #1 更新の途中でログアウトすると、遅れて終わった更新はトークンを書き戻さない。サーバーのセッションも無効になる', async () => {
+  const w = world();
+  await adminReady(w);
+  at(16 * MIN);
+  const gate = hold(w, 'POST /v1/auth/refresh');
+  const pending = send(w, { type: 'listSessions' });
+  await gate.arrived;
+  assert.equal((await send(w, { type: 'logout' }, POPUP)).ok, true);
+  gate.release();
+  assert.equal((await pending).error, 'NOT_LOGGED_IN');
+  assert.equal(w.chrome.storage.session.values.has('teampw/v1/session'), false, 'トークンが書き戻されていない');
+  assert.equal(Number(w.t.db.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE revoked_at IS NULL').get()!.n), 0, 'サーバーのセッションも無効');
+});
+
+test('Codex #1 更新の途中で別の人がログインしても、遅れて終わった前の人の更新で上書きしない', async () => {
+  const w = world();
+  await adminReady(w);
+  at(16 * MIN);
+  const gate = hold(w, 'POST /v1/auth/refresh');
+  const pending = send(w, { type: 'listSessions' });
+  await gate.arrived;
+  const other = newDiscordUser();
+  w.chrome.loginAs = other;
+  assert.equal((await send(w, { type: 'login', deviceLabel: 'テスト端末' }, POPUP)).status, 'totp_setup_required');
+  const otherId = String(w.t.db.db.prepare('SELECT id FROM members WHERE discord_user_id = ?').get(other)!.id);
+  gate.release();
+  await pending;
+  const stored = w.chrome.storage.session.values.get('teampw/v1/session') as { memberId: string };
+  assert.equal(stored.memberId, otherId, '後からログインした人のトークンのまま');
 });
 
 test('メンバー：鍵を作っても、照合と承認（フェーズ4）が済むまでグラントを開かない（P-04）', async () => {

@@ -51,8 +51,11 @@ export type SessionRecord = {
 
 const SESSION_KEY = 'teampw/v1/session';
 
+// 書き込み（set・clear）のたびに番号を進める。遅れて終わったトークンの更新は、始めたときの番号のままのときだけ書く
+// （その間にログアウトや別の人のログインがあれば、書き戻さない：Codex #1）。
 export class SessionStore {
   readonly #area: StorageArea;
+  #epoch = 0;
 
   constructor(area: StorageArea) {
     this.#area = area;
@@ -64,11 +67,24 @@ export class SessionStore {
     return { accessToken: v.accessToken, refreshToken: v.refreshToken, memberId: v.memberId, role: v.role === 'admin' ? 'admin' : 'member', totpSetupRequired: v.totpSetupRequired === true };
   }
 
+  epoch(): number {
+    return this.#epoch;
+  }
+
   async set(record: SessionRecord): Promise<void> {
+    this.#epoch += 1;
     await this.#area.set({ [SESSION_KEY]: { ...record } });
   }
 
+  // 番号が epoch のままなら書いて true。変わっていれば何もせず false
+  async setIfUnchanged(epoch: number, record: SessionRecord): Promise<boolean> {
+    if (this.#epoch !== epoch) return false;
+    await this.set(record);
+    return true;
+  }
+
   async clear(): Promise<void> {
+    this.#epoch += 1;
     await this.#area.remove(SESSION_KEY);
   }
 }

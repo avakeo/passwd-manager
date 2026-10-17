@@ -271,14 +271,18 @@ export function createBackground(deps: BackgroundDeps): Background {
     },
 
     async logout() {
-      try {
-        await api.call('POST', '/v1/auth/logout');
-      } catch {
-        // 通信できなくても、手元のセッションは消す
-      }
+      // 先に手元を消す（更新の途中でも、遅れて終わった更新は書き戻さない）
+      const s = await sessions.get();
       await sessions.clear();
       challenge = null;
       await lock();
+      if (s) {
+        try {
+          await api.logout(s);
+        } catch {
+          // 通信できなくても、手元のセッションは消してある
+        }
+      }
       return { ok: true };
     },
 
