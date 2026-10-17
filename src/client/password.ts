@@ -30,25 +30,31 @@ export function generatePassword(options: PasswordOptions = {}): string {
   if (options.alphabet !== undefined && [options.lower, options.upper, options.digits, options.symbols].some((v) => v !== undefined)) {
     throw new RangeError('alphabet and character classes cannot be combined');
   }
-  let alphabet = options.alphabet ?? [
+  let classes = options.alphabet !== undefined ? [options.alphabet] : [
     options.lower !== false ? LOWER : '',
     options.upper !== false ? UPPER : '',
     options.digits !== false ? DIGITS : '',
     options.symbols !== false ? SYMBOLS : '',
-  ].join('');
-  if (options.excludeAmbiguous) alphabet = [...alphabet].filter((c) => !AMBIGUOUS.has(c)).join('');
+  ];
+  classes = classes.filter((group) => group.length > 0);
+  if (options.excludeAmbiguous) classes = classes.map((group) => [...group].filter((c) => !AMBIGUOUS.has(c)).join(''));
+  if (classes.some((group) => group.length === 0) || length < classes.length) throw new RangeError('password cannot contain every enabled character class');
+  const alphabet = classes.join('');
   if (alphabet.length < 2 || alphabet.length > 256 || new Set(alphabet).size !== alphabet.length || [...alphabet].some((c) => c.length !== 1)) {
     throw new RangeError('alphabet must contain 2 to 256 distinct ASCII characters');
   }
   const limit = Math.floor(256 / alphabet.length) * alphabet.length;
-  const result: string[] = [];
-  while (result.length < length) {
-    const random = randomBytes(Math.min(4096, length - result.length + 32));
-    for (const value of random) {
-      if (value < limit) result.push(alphabet[value % alphabet.length]!);
-      if (result.length === length) break;
+  for (;;) {
+    const result: string[] = [];
+    while (result.length < length) {
+      const random = randomBytes(Math.min(4096, length - result.length + 32));
+      for (const value of random) {
+        if (value < limit) result.push(alphabet[value % alphabet.length]!);
+        if (result.length === length) break;
+      }
     }
+    const password = result.join('');
+    if (classes.every((group) => [...group].some((ch) => password.includes(ch)))) return password;
   }
-  return result.join('');
 }
 

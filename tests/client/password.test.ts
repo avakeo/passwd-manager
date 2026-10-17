@@ -31,4 +31,27 @@ test('C-11 指定の失敗条件とエントロピー表示用の値', () => {
   assert.ok(passwordEntropyBits(20, 62) > 119);
 });
 
+test('C-11 有効な文字種は短いパスワードでも各1文字以上含む', () => {
+  for (let i = 0; i < 100; i++) {
+    const value = generatePassword({ length: 4 });
+    assert.match(value, /[a-z]/);
+    assert.match(value, /[A-Z]/);
+    assert.match(value, /[0-9]/);
+    assert.match(value, /[^a-zA-Z0-9]/);
+  }
+  assert.throws(() => generatePassword({ length: 3 }));
+});
+
+test('C-11 作り直し後も有効な文字列の並びに偏りがない', () => {
+  let lowerFirst = 0;
+  const samples = 8_000;
+  for (let i = 0; i < samples; i++) {
+    const value = generatePassword({ length: 2, lower: true, upper: true, digits: false, symbols: false });
+    assert.match(value, /[a-z]/);
+    assert.match(value, /[A-Z]/);
+    if (/^[a-z]/.test(value)) lowerFirst++;
+  }
+  assert.ok(lowerFirst > 3_800 && lowerFirst < 4_200, `lowerFirst=${lowerFirst}`);
+});
+
 
