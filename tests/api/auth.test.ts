@@ -579,6 +579,8 @@ test('TOTP の作り直しは、認証アプリをなくした人のために、
   const userId = newDiscordUser();
   const m = await t.addMember('active', { discordUserId: userId, totpSecret: null });
   const { recoveryCodes } = await registerTotp(t, m.token);
+  // 登録したセッションは TOTP を確かめた扱いなので、5分を過ぎてから試す（5分以内ならコードなしで始められる）
+  mock.timers.setTime(T0 + 5 * 60 * 1000 + 1);
   const r = await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] });
   assert.equal(r.status, 200);
   const next = base32ToBytes(((await r.json()) as { secret: string }).secret);
@@ -587,14 +589,14 @@ test('TOTP の作り直しは、認証アプリをなくした人のために、
   assert.equal(hashes.length, 9);
   assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] })).status, 403);
   // 新しいシークレットで確定でき、回復コードも新しくなる
-  mock.timers.setTime(T0 + 30_000);
-  const ok = await t.request('POST', '/v1/me/totp/confirm', m.token, { code: referenceTotp(next, stepAt(T0 + 30_000)) });
+  const ok = await t.request('POST', '/v1/me/totp/confirm', m.token, { code: referenceTotp(next, stepAt(T0 + 5 * 60 * 1000 + 1)) });
   assert.equal(ok.status, 200);
   const fresh = ((await ok.json()) as { recovery_codes: string[] }).recovery_codes;
   assert.equal(fresh.length, 10);
-  mock.timers.setTime(T0 + 60_000);
-  assert.equal((await totpLogin(t, userId, referenceTotp(next, stepAt(T0 + 60_000)))).res.status, 200);
-  // コードと回復コードを両方付けるのは 400
+  mock.timers.setTime(T0 + 6 * 60 * 1000);
+  assert.equal((await totpLogin(t, userId, referenceTotp(next, stepAt(T0 + 6 * 60 * 1000)))).res.status, 200);
+  // コードと回復コードを両方付けるのは 400（確定したセッションも5分を過ぎてから）
+  mock.timers.setTime(T0 + 11 * 60 * 1000);
   assert.equal((await t.request('POST', '/v1/me/totp', m.token, { code: '000000', recovery_code: fresh[0] })).status, 400);
 });
 
@@ -602,10 +604,61 @@ test('A-08 TOTP の作り直しで回復コードを間違えても、TOTP と�
   const t = setup();
   const m = await t.addMember('active', { totpSecret: null });
   const { recoveryCodes } = await registerTotp(t, m.token);
+  mock.timers.setTime(T0 + 5 * 60 * 1000 + 1); // 5分以内ならコードなしで始められるので、過ぎてから試す
   for (let i = 0; i < 5; i++) assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: 'AAAA-AAAA-AAAA-AAAA' })).status, 403, `${i + 1}回目`);
   assert.equal((await t.request('POST', '/v1/me/totp', m.token, { recovery_code: recoveryCodes[0] })).status, 429);
   // 正しい回復コードも確かめずに断るので、消えていない
   assert.equal((JSON.parse(String(t.db.db.prepare('SELECT recovery_code_hashes AS h FROM members WHERE id = ?').get(m.id)!.h)) as string[]).length, 10);
+});
+
+test('回復コードが残り1個の人も、それでログインした直後なら、コードなしで作り直しを始め、新しい TOTP と回復コードでログインできる', async () => {
+  const t = setup();
+  const userId = newDiscordUser();
+  const m = await t.addMember('active', { discordUserId: userId, totpSecret: null });
+  const { recoveryCodes } = await registerTotp(t, m.token);
+  // 認証アプリをなくし、回復コードで9回ログインした。応答に残りの数が出る
+  for (let i = 0; i < 9; i++) {
+    const r = await totpLogin(t, userId, { recovery: recoveryCodes[i]! });
+    assert.equal(r.res.status, 200);
+    assert.equal((r.body as { recovery_codes_remaining?: number }).recovery_codes_remaining, 9 - i);
+  }
+  // 最後の1個でログインすると、残りは0
+  const last = await totpLogin(t, userId, { recovery: recoveryCodes[9]! });
+  assert.equal(last.res.status, 200);
+  assert.equal((last.body as { recovery_codes_remaining?: number }).recovery_codes_remaining, 0);
+  // 直近5分以内に TOTP（ここでは回復コード）を確かめたセッションなので、コードなしで始められる
+  mock.timers.setTime(T0 + 4 * 60 * 1000);
+  const start = await t.request('POST', '/v1/me/totp', last.body.access_token);
+  assert.equal(start.status, 200);
+  const next = base32ToBytes(((await start.json()) as { secret: string }).secret);
+  const ok = await t.request('POST', '/v1/me/totp/confirm', last.body.access_token, { code: referenceTotp(next, stepAt(T0 + 4 * 60 * 1000)) });
+  assert.equal(ok.status, 200);
+  const fresh = ((await ok.json()) as { recovery_codes: string[] }).recovery_codes;
+  // 新しい TOTP でも、新しい回復コードでもログインできる
+  mock.timers.setTime(T0 + 5 * 60 * 1000);
+  const byTotp = await totpLogin(t, userId, referenceTotp(next, stepAt(T0 + 5 * 60 * 1000)));
+  assert.equal(byTotp.res.status, 200);
+  assert.equal((byTotp.body as { recovery_codes_remaining?: number }).recovery_codes_remaining, 10);
+  assert.equal((await totpLogin(t, userId, { recovery: fresh[0]! })).res.status, 200);
+});
+
+test('TOTP を確かめてから5分を過ぎたセッションは、コードなしでは作り直しを始められない', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  const s = await t.addSession(m.id, { totpVerifiedAt: T0 });
+  mock.timers.setTime(T0 + 5 * 60 * 1000);
+  assert.equal((await t.request('POST', '/v1/me/totp', s.token)).status, 200, '5分ちょうどまでは始められる');
+  mock.timers.setTime(T0 + 5 * 60 * 1000 + 1);
+  assert.equal((await t.request('POST', '/v1/me/totp', s.token)).status, 400, '5分を過ぎたら、コードか回復コードが要る');
+  assert.equal((await t.request('POST', '/v1/me/totp', s.token, { code: referenceTotp(m.secret, stepAt(T0 + 5 * 60 * 1000 + 1)) })).status, 200);
+});
+
+test('GET /v1/me の応答に、回復コードの残りの数が入る', async () => {
+  const t = setup();
+  const admin = await t.addMember('active', { role: 'admin', totpSecret: null });
+  await registerTotp(t, admin.token);
+  const me = (await (await t.request('GET', '/v1/me', admin.token)).json()) as { recovery_codes_remaining?: number };
+  assert.equal(me.recovery_codes_remaining, 10);
 });
 
 for (const role of ['admin', 'member'] as const) {

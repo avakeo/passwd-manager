@@ -94,7 +94,11 @@ export function authorize(p: Principal, method: string, path: string): void {
 // 自分の別のセッションの無効化も、この判定を通す（A-15）。
 export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
-export function requireRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): void {
+export function hasRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): boolean {
   const at = p.totpVerifiedAt;
-  if (at === null || at > nowMs || nowMs - at > STEP_UP_WINDOW_MS) throw new HttpProblem(403);
+  return at !== null && at <= nowMs && nowMs - at <= STEP_UP_WINDOW_MS;
+}
+
+export function requireRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): void {
+  if (!hasRecentTotp(p, nowMs)) throw new HttpProblem(403);
 }

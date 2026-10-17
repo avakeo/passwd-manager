@@ -277,12 +277,12 @@ test('Z-08 GET /v1/me は必要な分だけを返し、Web 用トークンには
 
   // 拡張機能のメンバー：自分の鍵を開くのに要るものと、照合用の管理者の組。署名鍵の列は持たない
   const cExt = await me(c.token);
-  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(cExt).sort(), ['admin_signer', 'current_vault_key_version', 'id', 'key', 'recovery_codes_remaining', 'role']);
   assert.deepEqual(Object.keys(cExt.key).sort(), ['encrypted_private_key', 'format_version', 'id', 'kdf_algorithm', 'kdf_params', 'kdf_salt', 'ecdh_public_key'].sort());
 
   // 拡張機能の管理者：署名鍵も開く。照合用の管理者の組は要らない（自分の行を使う）
   const adminExt = await me(admin.token);
-  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'role']);
+  assert.deepEqual(Object.keys(adminExt).sort(), ['current_vault_key_version', 'id', 'key', 'recovery_codes_remaining', 'role']);
   assert.ok('encrypted_sign_private_key' in adminExt.key && 'ecdsa_public_key' in adminExt.key);
 
   // Web 用：暗号化した秘密鍵も、ロック解除に使う KDF の設定も返さない

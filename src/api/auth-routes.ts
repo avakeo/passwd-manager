@@ -5,7 +5,7 @@
 // トークンは乱数32バイト。D1 には SHA-256 だけを置き、応答で一度だけ生の値を返す。ログは出さない。
 
 import type { Hono } from 'hono';
-import { requireRecentTotp, sha256Hex } from './auth.ts';
+import { hasRecentTotp, requireRecentTotp, sha256Hex } from './auth.ts';
 import type { D1Database } from './d1.ts';
 import { exchangeCodeForUser, hasTeamRole } from './discord.ts';
 import type { Bindings, Env } from './env.ts';
@@ -46,6 +46,12 @@ function deviceLabel(v: unknown): string {
 
 function memberView(m: MemberRow) {
   return { id: m.id, role: m.role, status: m.status };
+}
+
+// 回復コードの残りの数。少なくなったら、拡張機能が作り直しを勧める
+export async function recoveryCodesRemaining(db: D1Database, memberId: string): Promise<number> {
+  const row = await db.prepare(`SELECT json_array_length(COALESCE(recovery_code_hashes, '[]')) AS n FROM members WHERE id = ?`).bind(memberId).first<{ n: number }>();
+  return Number(row?.n ?? 0);
 }
 
 async function audit(db: D1Database, memberId: string, action: string): Promise<void> {
@@ -155,7 +161,7 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     }
     const session = await issueSession(db, m.id, 'extension', label, null);
     // TOTP は全員必須。登録するまでは、TOTP の登録とログアウトしかできない（A-11）
-    return c.json({ status: 'totp_setup_required', ...session, member: memberView(m) });
+    return c.json({ status: 'totp_setup_required', ...session, member: memberView(m), recovery_codes_remaining: await recoveryCodesRemaining(db, m.id) });
   });
 
   // セッションの更新（公開。リフレッシュトークンを本文で受け取る）
@@ -201,7 +207,12 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     const used = await db.prepare('DELETE FROM auth_challenges WHERE id = ?').bind(ch.id).run();
     if (used.meta.changes !== 1) throw new HttpProblem(401);
     const session = await issueSession(db, ch.member_id, ch.scope, ch.device_label, now);
-    return c.json({ status: 'ok', ...session, member: memberView({ id: ch.member_id, role: ch.role, status: ch.status, has_totp: 1 }) });
+    return c.json({
+      status: 'ok',
+      ...session,
+      member: memberView({ id: ch.member_id, role: ch.role, status: ch.status, has_totp: 1 }),
+      recovery_codes_remaining: await recoveryCodesRemaining(db, ch.member_id),
+    });
   });
 
   app.post('/v1/auth/logout', async (c) => {
@@ -225,13 +236,15 @@ export function registerAuthRoutes(app: Hono<Env>): void {
   });
 
   // TOTP の登録の開始。シークレットは、コードで確定するまで登録途中の列に置く。
-  // 登録済みなら作り直し：今のコードか回復コードを確かめてから始める。確定するまでは今のシークレットのまま
+  // 登録済みなら作り直し：今のコードか回復コードを確かめてから始める。直近5分以内に TOTP を確かめたセッション
+  // （回復コードでのログイン直後を含む）なら、コードなしでも始められる（最後の回復コードでログインした人が締め出されない）。
+  // 確定するまでは今のシークレットのまま
   app.post('/v1/me/totp', async (c) => {
     const p = c.get('principal');
     const db = c.env.DB;
     const m = await db.prepare('SELECT display_name, totp_secret_encrypted AS s FROM members WHERE id = ?').bind(p.memberId).first<{ display_name: string; s: string | null }>();
     if (!m) throw new HttpProblem(404);
-    if (m.s !== null) {
+    if (m.s !== null && !hasRecentTotp(p, Date.now())) {
       // 認証アプリをなくした人のために、回復コードでも始められる（使ったコードは消える。試行は同じように数える）
       const body = await readJsonOneOf(c.req.raw, [['code'], ['recovery_code']]);
       const ok = 'code' in body ? await checkMemberCode(c.env, p.memberId, body.code) : await checkRecoveryCode(db, p.memberId, body.recovery_code);

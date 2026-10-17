@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { authenticate, authorize, routeKey } from './auth.ts';
-import { registerAuthRoutes } from './auth-routes.ts';
+import { recoveryCodesRemaining, registerAuthRoutes } from './auth-routes.ts';
 import type { D1Database } from './d1.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
@@ -105,7 +105,14 @@ export function createApp() {
       .bind(p.memberId)
       .first();
     // 今の世代は、承認の照合で管理者の画面と見比べ、最後に見た世代の初期化に使う（DeepSeek #1）
-    const body: Record<string, unknown> = { id: p.memberId, role: p.role, current_vault_key_version: p.currentVaultKeyVersion, key };
+    const body: Record<string, unknown> = {
+      id: p.memberId,
+      role: p.role,
+      current_vault_key_version: p.currentVaultKeyVersion,
+      key,
+      // 少なくなったら、拡張機能が TOTP の作り直しを勧める
+      recovery_codes_remaining: await recoveryCodesRemaining(c.env.DB, p.memberId),
+    };
     if (!isAdmin) {
       const signers = await c.env.DB.prepare(
         `SELECT m.id AS member_id, k.id AS key_id, k.ecdsa_public_key
