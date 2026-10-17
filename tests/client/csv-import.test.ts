@@ -50,3 +50,19 @@ test('M-02 既存アイテムとの重複でパスワード変更の有無を返
   ]);
 });
 
+test('M-02 使わない見出しの重複は無視し、使う見出しの重複は結果で報告する', () => {
+  const allowed = importCsvPreview('name,url,username,password,tag,tag\nWiki,https://wiki.example.com,u,p,a,b\n', 'chrome');
+  assert.equal(allowed.items.length, 1);
+  assert.deepEqual(allowed.errors, []);
+  for (const header of ['name,name,url,username,password', 'name,url,username,email,password', 'name,url,username,password,password']) {
+    assert.deepEqual(importCsvPreview(`${header}\nWiki,https://wiki.example.com,u,p,p\n`, 'chrome').errors, [{ row: 1, reason: 'invalid CSV header' }]);
+  }
+});
+
+test('M-03 空・見出し不足・壊れたCSVも例外で止まらず結果で報告する', () => {
+  for (const source of ['', 'name,username,password\nA,u,p', 'name,url,username,password\n"bad"x,https://a.example,u,p']) {
+    const result = importCsvPreview(source, 'chrome');
+    assert.ok(result.errors.length > 0);
+  }
+});
+

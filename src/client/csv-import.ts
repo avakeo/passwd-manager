@@ -54,9 +54,12 @@ function parseCsv(source: string, lineOffset = 0): { rows: ParsedRow[]; errors: 
   return { rows, errors };
 }
 
-function columns(format: CsvFormat, header: string[]): { title: number; url: number; username: number; password: number; notes: number } {
+function columns(format: CsvFormat, header: string[]): { title: number; url: number; username: number; password: number; notes: number } | undefined {
   const h = header.map((v) => v.trim().toLowerCase());
   const find = (...names: string[]) => h.findIndex((v) => names.includes(v));
+  const groups = [format === '1password' ? ['title'] : format === 'chrome' ? ['name', 'title'] : ['name'],
+    format === '1password' ? ['website', 'url'] : ['url'], ['username', 'email'], ['password'], format === '1password' ? ['notes'] : ['note', 'notes']];
+  if (groups.some((names) => h.filter((name) => names.includes(name)).length > 1)) return undefined;
   const result = {
     title: find(...(format === '1password' ? ['title'] : ['name'])),
     url: find(...(format === '1password' ? ['website', 'url'] : ['url'])),
@@ -65,9 +68,8 @@ function columns(format: CsvFormat, header: string[]): { title: number; url: num
   };
   if (result.title < 0 && format === 'chrome') result.title = find('title');
   if (result.url < 0 || result.username < 0 || result.password < 0 || result.title < 0) {
-    throw new TypeError('required CSV header missing');
+    return undefined;
   }
-  if (new Set(h).size !== h.length) throw new TypeError('duplicate CSV header');
   return result;
 }
 
@@ -76,11 +78,12 @@ function duplicateKey(item: LoginItem): string {
 }
 
 export function importCsvPreview(csv: string, format: CsvFormat, existing: readonly LoginItem[] = []): CsvPreview {
-  if (!['chrome', 'proton', '1password'].includes(format)) throw new TypeError('unsupported CSV format');
+  if (typeof csv !== 'string' || !['chrome', 'proton', '1password'].includes(format)) return { items: [], errors: [{ row: 1, reason: 'invalid CSV header' }], warnings: [] };
   const parsed = parseCsv(csv);
   const header = parsed.rows.shift();
-  if (!header) throw new TypeError('CSV header missing');
+  if (!header) return { items: [], errors: [...parsed.errors, { row: 1, reason: 'invalid CSV header' }], warnings: [] };
   const map = columns(format, header.cells);
+  if (!map) return { items: [], errors: [...parsed.errors, { row: header.row, reason: 'invalid CSV header' }], warnings: [] };
   const seen = new Set(existing.map(duplicateKey));
   const existingPasswords = new Map<string, Set<string>>();
   for (const item of existing) {
