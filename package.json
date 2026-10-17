@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --experimental-strip-types --no-warnings --test --test-reporter=spec \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
+    "build:extension": "node --experimental-strip-types --no-warnings scripts/build-extension.ts",
     "vectors:fetch": "node --experimental-strip-types --no-warnings scripts/fetch-vectors.ts"
   },
   "dependencies": {
