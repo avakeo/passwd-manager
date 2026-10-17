@@ -144,6 +144,8 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     if (Number(m.has_totp) === 1) {
       const challenge = newToken();
       const now = Date.now();
+      // 期限の切れた一時トークンは、新しく作るときに消す（使われずに溜まらないように）
+      await db.prepare('DELETE FROM auth_challenges WHERE expires_at <= ?').bind(now).run();
       await db
         .prepare(`INSERT INTO auth_challenges (id, member_id, challenge_hash, scope, device_label, created_at, expires_at) VALUES (?, ?, ?, 'extension', ?, ?, ?)`)
         .bind(newId('challenge'), m.id, await sha256Hex(challenge), label, now, now + CHALLENGE_TTL_MS)

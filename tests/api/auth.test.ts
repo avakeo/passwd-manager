@@ -375,6 +375,17 @@ test('TOTP の一時トークンは5分で切れる', async () => {
   mock.timers.setTime(T0);
 });
 
+test('期限切れの一時トークンは、新しく作るときに消す', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  for (let i = 0; i < 3; i++) await login(t, m.userId);
+  assert.equal(count(t, 'auth_challenges'), 3);
+  mock.timers.setTime(T0 + 5 * 60 * 1000);
+  await login(t, m.userId);
+  assert.equal(count(t, 'auth_challenges'), 1, '期限切れの3つは消え、新しい1つだけ');
+  mock.timers.setTime(T0);
+});
+
 test('A-09 一度使った TOTP コードをもう一度送ると拒否される（それより前のステップのコードも拒否）', async () => {
   const t = setup();
   const m = await memberWithTotp(t);
