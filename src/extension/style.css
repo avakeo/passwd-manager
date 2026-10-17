@@ -104,3 +104,30 @@ button.secondary {
   word-break: break-all;
   user-select: all;
 }
+
+.row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.field {
+  display: block;
+  margin: 6px 0;
+}
+
+textarea {
+  font: inherit;
+  width: 100%;
+  min-height: 4em;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+li {
+  margin: 4px 0;
+}

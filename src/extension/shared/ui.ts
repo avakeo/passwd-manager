@@ -46,6 +46,15 @@ const ERRORS: Record<string, string> = {
   LOGIN_FAILED: 'ログインに失敗しました',
   NETWORK: 'サーバーにつながりません',
   ADMIN_NOT_READY: '管理者の準備がまだです',
+  PASSWORD_REQUIRED: 'この操作にはマスターパスワードが要ります。ロックしてから、マスターパスワードで解除してください',
+  BAD_PASSCODE: 'パスコードが違います',
+  QUICK_UNLOCK_CLEARED: '5回間違えたので、パスコードを消しました。マスターパスワードで解除してください',
+  NO_QUICK_UNLOCK: 'パスコードは使えません。マスターパスワードで解除してください',
+  ROLLBACK_DETECTED: 'サーバーが古い状態を返しました。同期を止めています',
+  UNREADABLE: 'このアイテムは読めません',
+  TOO_LARGE: 'アイテムが大きすぎます',
+  VAULT_NOT_READY: 'まだ Vault を開けていません',
+  MEMBER_MISMATCH: 'サーバーの応答が、ログインした人と食い違っています',
 };
 
 export function errorText(code: string | undefined): string {

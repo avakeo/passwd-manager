@@ -43,10 +43,12 @@ test('ビルド：TypeScript から拡張機能を作り、import の .ts は .j
 test('HTML として解釈しない：拡張機能の画面のコードに innerHTML・outerHTML・insertAdjacentHTML・document.write がない（DeepSeek #2）', () => {
   const root = new URL('../../src/extension/', import.meta.url);
   const files = readdirSync(root, { recursive: true }).map((p) => p.replace(/\\/g, '/')).filter((p) => /\.(ts|html)$/.test(p));
-  assert.ok(files.some((f) => f.endsWith('page/app.ts')) && files.some((f) => f.endsWith('popup/popup.ts')));
+  assert.ok(files.some((f) => f.endsWith('page/app.ts')) && files.some((f) => f.endsWith('page/items.ts')) && files.some((f) => f.endsWith('popup/popup.ts')));
   for (const f of files) {
     const text = readFileSync(new URL(f, root), 'utf8');
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function/.test(text), f);
+    // アイテムの中身（URL など）をリンクや画像の行き先にしない。イベント属性を後から付けない（フェーズ2b）
+    assert.ok(!/\.(href|src)\s*=|setAttribute\(\s*['"](on|href|src)/i.test(text), `${f}：href・src・イベント属性に値を入れない`);
     if (f.endsWith('.html')) assert.ok(!/<script(?![^>]*\bsrc=)/.test(text) && !/\son[a-z]+=/i.test(text), `${f}：インラインのスクリプトとイベント属性を書かない`);
   }
 });
