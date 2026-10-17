@@ -68,7 +68,11 @@ export async function refreshSession(
     )
     .bind(await sha256Hex(accessToken), await sha256Hex(newRefreshToken), hash, now + ACCESS_TOKEN_TTL_MS, now, row.id, hash)
     .run();
-  if (res.meta.changes !== 1) throw new HttpProblem(401); // 同時に更新された
+  if (res.meta.changes !== 1) {
+    // 同じトークンで同時に更新された。負けた側も使い回しとみなし、勝った側のトークンも含めてセッションごと無効にする（A-12）
+    await revokeSession(db, row.id);
+    throw new HttpProblem(401);
+  }
   // リフレッシュトークンの期限は、ログインから7日のまま延ばさない
   return { access_token: accessToken, refresh_token: newRefreshToken, access_expires_at: now + ACCESS_TOKEN_TTL_MS, refresh_expires_at: Number(row.refresh_expires_at) };
 }

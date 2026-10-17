@@ -33,6 +33,7 @@ export class FakeDiscord {
   readonly #codes = new Map<string, Code>();
   readonly #tokens = new Map<string, string>(); // アクセストークン → ユーザー ID
   failNext: 'token' | 'user' | 'member' | null = null; // 次の1回を 500 にする（Discord の障害）
+  #memberBarrier: { waiting: number; release: () => void; ready: Promise<void> } | null = null;
 
   constructor(config: { clientId: string; clientSecret: string; botToken: string; guildId: string }) {
     this.#config = config;
@@ -54,6 +55,13 @@ export class FakeDiscord {
     const code = random('code');
     this.#codes.set(code, { ...opts, used: false });
     return code;
+  }
+
+  // 次の n 回のメンバーの取得を、n 回そろうまで待たせる（同時に来たリクエストを、ロールの確認の位置で並べる）
+  holdMemberRequests(n: number): void {
+    let release!: () => void;
+    const ready = new Promise<void>((r) => (release = r));
+    this.#memberBarrier = { waiting: n, release, ready };
   }
 
   install(): () => void {
@@ -104,6 +112,15 @@ export class FakeDiscord {
     }
     const member = /^\/guilds\/(\d+)\/members\/(\d+)$/.exec(path);
     if (method === 'GET' && member) {
+      const barrier = this.#memberBarrier;
+      if (barrier) {
+        barrier.waiting -= 1;
+        if (barrier.waiting === 0) {
+          this.#memberBarrier = null;
+          barrier.release();
+        }
+        await barrier.ready;
+      }
       if (this.failNext === 'member') return ((this.failNext = null), json(500, { message: 'internal' }));
       if (headers['authorization'] !== `Bot ${this.#config.botToken}`) return json(401, { message: '401: Unauthorized', code: 0 });
       if (member[1] !== this.#config.guildId) return json(403, { message: 'Missing Access', code: 50001 });

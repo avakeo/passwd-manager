@@ -238,6 +238,20 @@ test('A-12 使用済みのリフレッシュトークンをもう一度使うと
   assert.equal((await refresh(t, first.body.refresh_token!)).res.status, 401);
 });
 
+test('A-12 同じリフレッシュトークンで同時に更新すると、条件付きの更新に負けた側も使い回しとみなし、セッションごと無効になる', async () => {
+  const t = setup();
+  const { body } = await login(t, newDiscordUser());
+  // 2つの更新が、どちらも古いトークンでセッションを読んだ後、ロールの確認の位置で並ぶ
+  fake.holdMemberRequests(2);
+  const results = await Promise.all([refresh(t, body.refresh_token!), refresh(t, body.refresh_token!)]);
+  assert.deepEqual(results.map((r) => r.res.status).sort(), [200, 401]);
+  const winner = results.find((r) => r.res.status === 200)!;
+  // 勝った側の新しいトークンも使えない
+  assert.equal((await t.request('GET', '/v1/me/sessions', winner.body.access_token)).status, 401);
+  assert.equal((await refresh(t, winner.body.refresh_token!)).res.status, 401);
+  assert.notEqual(t.db.db.prepare('SELECT revoked_at AS r FROM sessions').get()!.r, null);
+});
+
 test('A-05 A-06 期限切れのアクセストークン・リフレッシュトークン、無効化されたセッションは 401', async () => {
   const t = setup();
   const { body } = await login(t, newDiscordUser());
