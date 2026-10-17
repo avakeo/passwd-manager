@@ -9,6 +9,14 @@ import { FakeDiscord } from '../helpers/fake-discord.ts';
 import { FakeChrome } from '../helpers/fake-chrome.ts';
 import { TEST_ENV, setup } from '../helpers/api.ts';
 import { base32ToBytes, referenceTotp, stepAt } from '../helpers/totp-reference.ts';
+import { chromeTrustStorage } from '../../src/extension/background/storage.ts';
+import { fromBase64Url, toBase64Url } from '../../src/crypto/bytes.ts';
+import { createAdminKey } from '../../src/crypto/member-key.ts';
+import { createGrant } from '../../src/crypto/grant.ts';
+import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { openTrust, pinSigner } from '../../src/crypto/signer.ts';
+import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
+import { newTrust } from '../helpers/trust.ts';
 
 const T0 = 1_800_000_000_000;
 mock.timers.enable({ apis: ['Date'], now: T0 });
@@ -334,6 +342,55 @@ test('Codex #4 ログインの応答のメンバー ID と GET /v1/me の id が
   assert.equal(w.chrome.storage.local.dump(), before, '固定も世代も書かない');
   assert.equal(Number(w.t.db.db.prepare('SELECT COUNT(*) AS n FROM member_keys').get()!.n), 0);
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
+test('Codex #5 P-04 P-07 固定と最後に見た世代が未設定の端末（storage.local が空）は、サーバーが本物のグラントを返しても開かない', async () => {
+  const w = world();
+  // 管理者は、テストの中で暗号コアを使って作る（鍵とグラントは本物）
+  const admin = await w.t.addMember('active', { role: 'admin' });
+  const adminKey = await createAdminKey(ADMIN_PASSWORD);
+  w.t.db.db
+    .prepare(`INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
+                                       kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'PBKDF2-HMAC-SHA256', '{"iterations":600000,"normalization":"NFC"}', ?, 1, 'active', 0)`)
+    .run(adminKey.record.keyId, admin.id, toBase64Url(adminKey.record.publicKey), toBase64Url(adminKey.record.encryptedPrivateKey),
+      toBase64Url(adminKey.record.signPublicKey), toBase64Url(adminKey.record.encryptedSignPrivateKey), toBase64Url(adminKey.record.kdf.salt));
+  w.t.db.db.exec(`INSERT INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1);
+                  INSERT INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
+  // メンバー：拡張機能でログインし、鍵を作る
+  await loginAndRegisterTotp(w, newDiscordUser(), false);
+  assert.equal((await send(w, { type: 'createKey', masterPassword: MEMBER_PASSWORD, replace: false })).vault, 'awaiting-approval');
+  const memberId = String(((await send(w, { type: 'status' }, POPUP)) as unknown as { member: { id: string } }).member.id);
+  const row = w.t.db.db.prepare(`SELECT id, ecdh_public_key AS pk FROM member_keys WHERE member_id = ? AND status = 'active'`).get(memberId)!;
+  // 管理者がメンバーを承認し、本物の署名付きグラントを置いた（承認の API はフェーズ4なので D1 に直接入れる）
+  const adminTrust = newTrust(admin.id);
+  await pinSigner(adminTrust, { memberId: admin.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey }, 1);
+  const pins = new MemoryPinStore();
+  const recipient = { keyId: String(row.id), publicKey: fromBase64Url(String(row.pk)) };
+  await pinPublicKey(pins, memberId, recipient);
+  const grant = await createGrant({
+    pins,
+    signer: { memberId: admin.id, keyId: adminKey.record.keyId, privateKey: adminKey.signPrivateKey, trust: adminTrust },
+    memberId,
+    recipient,
+    vaultKeyVersion: 1,
+    vaultKeyRaw: generateVaultKeyRaw(),
+  });
+  w.t.db.db
+    .prepare(`INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at)
+              VALUES (1, ?, ?, ?, ?, ?, 1, 0)`)
+    .run(grant.recipientKeyId, toBase64Url(grant.ephemeralPublicKey), toBase64Url(grant.wrappedKey), grant.signerKeyId, toBase64Url(grant.signature));
+  w.t.db.db.prepare(`UPDATE members SET status = 'active' WHERE id = ?`).run(memberId);
+  // 端末は照合をしていない（storage.local に固定も世代もない）ので、本物のグラントでも開かない
+  assert.equal([...w.chrome.storage.local.values.keys()].filter((k) => k.includes(memberId)).length, 0);
+  await send(w, { type: 'lock' }, POPUP);
+  assert.equal((await send(w, { type: 'unlock', masterPassword: MEMBER_PASSWORD }, POPUP)).vault, 'awaiting-approval');
+  assert.equal(w.bg.memoryState().vaultKey, false);
+  // 対照：照合して固定と世代を storage.local に入れれば、同じグラントを開ける（グラントが本物であることの確認）
+  await pinSigner(openTrust(chromeTrustStorage(w.chrome.storage.local), { apiOrigin: API_ORIGIN, memberId }), { memberId: admin.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey }, 1);
+  await send(w, { type: 'lock' }, POPUP);
+  assert.equal((await send(w, { type: 'unlock', masterPassword: MEMBER_PASSWORD }, POPUP)).vault, 'ready');
+  assert.equal(w.bg.memoryState().vaultKey, true);
 });
 
 test('メンバー：鍵を作っても、照合と承認（フェーズ4）が済むまでグラントを開かない（P-04）', async () => {
