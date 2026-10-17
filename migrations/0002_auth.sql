@@ -1,9 +1,10 @@
 -- フェーズ1：Discord ログイン、セッションの更新、TOTP。仕様書「D1テーブル設計」「認証・認可フロー」。
 
--- TOTP の登録の途中のシークレット（コードで確定するまで使わない）と、失敗の回数（15分で5回まで）
+-- TOTP の登録の途中のシークレット（コードで確定するまで使わない）と、試行の回数と最後に試した時刻
+-- （コードを確かめる前に数える。5回目から15分は締め出す。成功したら戻す）
 ALTER TABLE members ADD COLUMN totp_pending_secret_encrypted TEXT;
 ALTER TABLE members ADD COLUMN totp_failed_count INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE members ADD COLUMN totp_failed_window_start INTEGER;
+ALTER TABLE members ADD COLUMN totp_failed_at INTEGER;
 
 -- リフレッシュトークンの期限（ログインから7日。更新しても延ばさない）、
 -- このセッションで TOTP を確かめた時刻（管理操作の再確認に使う）

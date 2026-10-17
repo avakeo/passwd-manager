@@ -51,28 +51,25 @@ async function audit(db: D1Database, memberId: string, action: string): Promise<
   await db.prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) VALUES (?, ?, 'member', ?, ?)`).bind(memberId, action, memberId, Date.now()).run();
 }
 
-// ---- TOTP の失敗の制限（メンバーごとに15分で5回まで：A-08） ----
+// ---- TOTP の失敗の制限（メンバーごとに5回まで：A-08） ----
+// コードを確かめる前に、上限未満のときだけ回数を1つ増やす（1つの UPDATE なので、同時に送られても5回を超えない）。
+// 増やせなければ確かめずに 429。前の試行から15分あくと数え直す。5回目の時刻から15分は締め出す。成功したら回数を戻す。
 
-async function assertNotLocked(db: D1Database, memberId: string, now: number): Promise<void> {
-  const row = await db.prepare('SELECT totp_failed_count AS n, totp_failed_window_start AS start FROM members WHERE id = ?').bind(memberId).first<{ n: number; start: number | null }>();
-  if (row && Number(row.n) >= TOTP_MAX_FAILURES && row.start !== null && now - Number(row.start) < TOTP_FAILURE_WINDOW_MS) throw new HttpProblem(429);
-}
-
-async function recordFailure(db: D1Database, memberId: string, now: number): Promise<void> {
-  // SET の式は、どれも更新前の値で計算される
-  await db
+async function takeAttempt(db: D1Database, memberId: string, now: number): Promise<void> {
+  const res = await db
     .prepare(
       `UPDATE members SET
-         totp_failed_count = CASE WHEN totp_failed_window_start IS NULL OR ? - totp_failed_window_start >= ? THEN 1 ELSE totp_failed_count + 1 END,
-         totp_failed_window_start = CASE WHEN totp_failed_window_start IS NULL OR ? - totp_failed_window_start >= ? THEN ? ELSE totp_failed_window_start END
-       WHERE id = ?`,
+         totp_failed_count = CASE WHEN totp_failed_at IS NULL OR ? - totp_failed_at >= ? THEN 1 ELSE totp_failed_count + 1 END,
+         totp_failed_at = ?
+       WHERE id = ? AND NOT (totp_failed_count >= ? AND totp_failed_at IS NOT NULL AND ? - totp_failed_at < ?)`,
     )
-    .bind(now, TOTP_FAILURE_WINDOW_MS, now, TOTP_FAILURE_WINDOW_MS, now, memberId)
+    .bind(now, TOTP_FAILURE_WINDOW_MS, now, memberId, TOTP_MAX_FAILURES, now, TOTP_FAILURE_WINDOW_MS)
     .run();
+  if (res.meta.changes !== 1) throw new HttpProblem(429);
 }
 
 async function recordSuccess(db: D1Database, memberId: string): Promise<void> {
-  await db.prepare('UPDATE members SET totp_failed_count = 0, totp_failed_window_start = NULL WHERE id = ?').bind(memberId).run();
+  await db.prepare('UPDATE members SET totp_failed_count = 0, totp_failed_at = NULL WHERE id = ?').bind(memberId).run();
 }
 
 // 登録済みの TOTP でコードを確かめる。登録していなければ null（呼び出し側が 409 などにする）。
@@ -82,7 +79,7 @@ async function checkMemberCode(env: Bindings, memberId: string, code: unknown): 
   const now = Date.now();
   const row = await db.prepare('SELECT totp_secret_encrypted AS s, totp_last_step AS last FROM members WHERE id = ?').bind(memberId).first<{ s: string | null; last: number | null }>();
   if (!row || row.s === null) return null;
-  await assertNotLocked(db, memberId, now);
+  await takeAttempt(db, memberId, now);
   const secret = await decryptTotpSecret(env.TOTP_ENCRYPTION_KEY, memberId, row.s, 'totp-secret');
   let step: number | null;
   try {
@@ -97,13 +94,11 @@ async function checkMemberCode(env: Bindings, memberId: string, code: unknown): 
       return true;
     }
   }
-  await recordFailure(db, memberId, now);
   return false;
 }
 
 async function checkRecoveryCode(db: D1Database, memberId: string, code: unknown): Promise<boolean> {
-  const now = Date.now();
-  await assertNotLocked(db, memberId, now);
+  await takeAttempt(db, memberId, Date.now());
   const row = await db.prepare('SELECT recovery_code_hashes AS h FROM members WHERE id = ?').bind(memberId).first<{ h: string | null }>();
   const hashes = row?.h ? (JSON.parse(row.h) as string[]) : [];
   const hash = typeof code === 'string' && code.length <= 64 ? await hashRecoveryCode(code) : '';
@@ -115,7 +110,6 @@ async function checkRecoveryCode(db: D1Database, memberId: string, code: unknown
       return true;
     }
   }
-  await recordFailure(db, memberId, now);
   return false;
 }
 
@@ -249,14 +243,11 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     const m = await db.prepare('SELECT totp_secret_encrypted AS s, totp_pending_secret_encrypted AS pending FROM members WHERE id = ?').bind(p.memberId).first<{ s: string | null; pending: string | null }>();
     if (!m || m.s !== null || m.pending === null) throw new HttpProblem(409);
     const now = Date.now();
-    await assertNotLocked(db, p.memberId, now);
+    await takeAttempt(db, p.memberId, now);
     const secret = await decryptTotpSecret(c.env.TOTP_ENCRYPTION_KEY, p.memberId, m.pending, 'totp-pending-secret');
     try {
       const step = await verifyTotp(secret, typeof body.code === 'string' ? body.code : '', now, null);
-      if (step === null) {
-        await recordFailure(db, p.memberId, now);
-        throw new HttpProblem(403);
-      }
+      if (step === null) throw new HttpProblem(403);
       const codes = newRecoveryCodes();
       const hashes = await Promise.all(codes.map(hashRecoveryCode));
       const encrypted = await encryptTotpSecret(c.env.TOTP_ENCRYPTION_KEY, p.memberId, secret, 'totp-secret');
@@ -264,7 +255,7 @@ export function registerAuthRoutes(app: Hono<Env>): void {
         db
           .prepare(
             `UPDATE members SET totp_secret_encrypted = ?, totp_pending_secret_encrypted = NULL, totp_last_step = ?, recovery_code_hashes = ?,
-                    totp_failed_count = 0, totp_failed_window_start = NULL
+                    totp_failed_count = 0, totp_failed_at = NULL
               WHERE id = ? AND totp_secret_encrypted IS NULL AND totp_pending_secret_encrypted = ?`,
           )
           .bind(encrypted, step, JSON.stringify(hashes), p.memberId, m.pending),

@@ -400,6 +400,60 @@ test('A-08 間違った TOTP コードを繰り返すと、5回で 15分間 429 
   mock.timers.setTime(T0);
 });
 
+test('A-08 間違った TOTP コードを同時に20個送っても、試せるのは5回までで、残りは確かめずに 429', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  const challenges: string[] = [];
+  for (let i = 0; i < 20; i++) challenges.push((await login(t, m.userId)).body.challenge_token!);
+  const results = await Promise.all(challenges.map((ch) => t.request('POST', '/v1/auth/totp', undefined, { challenge_token: ch, code: '000000' })));
+  const statuses = results.map((r) => r.status);
+  assert.equal(statuses.filter((s) => s === 401).length, 5, '確かめたのは5回');
+  assert.equal(statuses.filter((s) => s === 429).length, 15);
+  // 回復コードでも同じ数え方
+  assert.equal((await totpLogin(t, m.userId, { recovery: 'AAAA-AAAA-AAAA-AAAA' })).res.status, 429);
+});
+
+test('A-08 時間をおいて失敗を重ねても、5回目の失敗の時刻から15分締め出される', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  const at = (ms: number) => mock.timers.setTime(T0 + ms);
+  const MIN = 60 * 1000;
+  for (const [i, ms] of [0, 4 * MIN, 8 * MIN, 12 * MIN, 14 * MIN + 59_000].entries()) {
+    at(ms);
+    assert.equal((await totpLogin(t, m.userId, '000000')).res.status, 401, `${i + 1}回目`);
+  }
+  const fifth = 14 * MIN + 59_000;
+  // 最初の失敗から15分を過ぎても、5回目から15分たつまでは、正しいコードも 429
+  for (const ms of [15 * MIN + 1000, fifth + 15 * MIN - 1]) {
+    at(ms);
+    assert.equal((await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(T0 + ms)))).res.status, 429, `${ms}`);
+  }
+  at(fifth + 15 * MIN);
+  assert.equal((await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(T0 + fifth + 15 * MIN)))).res.status, 200);
+  mock.timers.setTime(T0);
+});
+
+test('A-08 成功したら失敗の回数を戻す（4回失敗して成功した後は、また5回まで試せる）', async () => {
+  const t = setup();
+  const m = await memberWithTotp(t);
+  for (let i = 0; i < 4; i++) assert.equal((await totpLogin(t, m.userId, '000000')).res.status, 401);
+  assert.equal((await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(T0)))).res.status, 200);
+  for (let i = 0; i < 4; i++) assert.equal((await totpLogin(t, m.userId, '000000')).res.status, 401, `戻した後の${i + 1}回目`);
+  mock.timers.setTime(T0 + 30_000);
+  assert.equal((await totpLogin(t, m.userId, referenceTotp(m.secret, stepAt(T0 + 30_000)))).res.status, 200);
+  mock.timers.setTime(T0);
+});
+
+test('A-08 TOTP の登録の確定でも、同時に送ったコードは5回までしか試せない', async () => {
+  const t = setup();
+  const m = await t.addMember('active');
+  await t.request('POST', '/v1/me/totp', m.token);
+  const results = await Promise.all(Array.from({ length: 20 }, () => t.request('POST', '/v1/me/totp/confirm', m.token, { code: '000000' })));
+  const statuses = results.map((r) => r.status);
+  assert.equal(statuses.filter((s) => s === 403).length, 5);
+  assert.equal(statuses.filter((s) => s === 429).length, 15);
+});
+
 test('回復コードは1回だけ使える', async () => {
   const t = setup();
   // 拡張機能から登録して、回復コードを受け取る
