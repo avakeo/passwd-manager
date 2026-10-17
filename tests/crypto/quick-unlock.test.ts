@@ -33,13 +33,13 @@ test('A-5 違うパスコード、別のメンバー・接続先の組では開�
     ['接続先', '2580', { ...ctx, apiOrigin: 'https://other.example.com' }, record],
     ['世代', '2580', ctx, { ...record, vaultKeyVersion: 4 }],
   ] as const) {
-    await assert.rejects(openQuickUnlock(p, r, c), (e) => code(e) === 'DECRYPT_FAILED', name);
+    await assert.rejects(openQuickUnlock(p, r, c), (e: unknown) => code(e) === 'DECRYPT_FAILED', name);
   }
 });
 
 test('A-5 反復回数やソルトを書き換えた保存は、重い計算の前に断る。パスコードは4桁の数字だけ', async () => {
-  await assert.rejects(openQuickUnlock('2580', { ...record, iterations: 1000 }, ctx), (e) => code(e) === 'KDF_PARAMS_REJECTED');
-  await assert.rejects(openQuickUnlock('2580', { ...record, salt: 'AAAA' }, ctx), (e) => code(e) === 'KDF_PARAMS_REJECTED');
-  await assert.rejects(sealQuickUnlock('12345', raw.slice(), ctx), (e) => code(e) === 'INVALID_INPUT');
-  await assert.rejects(sealQuickUnlock('12a4', raw.slice(), ctx), (e) => code(e) === 'INVALID_INPUT');
+  await assert.rejects(openQuickUnlock('2580', { ...record, iterations: 1000 }, ctx), (e: unknown) => code(e) === 'KDF_PARAMS_REJECTED');
+  await assert.rejects(openQuickUnlock('2580', { ...record, salt: 'AAAA' }, ctx), (e: unknown) => code(e) === 'KDF_PARAMS_REJECTED');
+  await assert.rejects(sealQuickUnlock('12345', raw.slice(), ctx), (e: unknown) => code(e) === 'INVALID_INPUT');
+  await assert.rejects(sealQuickUnlock('12a4', raw.slice(), ctx), (e: unknown) => code(e) === 'INVALID_INPUT');
 });
