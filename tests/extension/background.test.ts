@@ -420,6 +420,20 @@ test('Codex #5 P-04 P-07 固定と最後に見た世代が未設定の端末（s
   assert.equal(w.bg.memoryState().vaultKey, true);
 });
 
+test('DeepSeek #5 ロックでも、ログインの途中の一時トークンを消す（ログアウトと同じ）', async () => {
+  const w = world();
+  const { userId, secret } = await adminReady(w);
+  w.chrome.storage.session.clear(); // ブラウザを閉じた
+  w.bg = newBackground(w);
+  at(MIN);
+  w.chrome.loginAs = userId;
+  assert.equal((await send(w, { type: 'login', deviceLabel: 'テスト端末' }, POPUP)).status, 'totp_required');
+  assert.equal((await send(w, { type: 'status' }, POPUP)).loginInProgress, true);
+  await send(w, { type: 'lock' }, POPUP);
+  assert.equal((await send(w, { type: 'status' }, POPUP)).loginInProgress, false);
+  assert.equal((await send(w, { type: 'loginTotp', code: referenceTotp(secret, stepAt(Date.now())) }, POPUP)).error, 'NO_LOGIN_IN_PROGRESS');
+});
+
 test('メンバー：鍵を作っても、照合と承認（フェーズ4）が済むまでグラントを開かない（P-04）', async () => {
   const w = world();
   await adminReady(w);

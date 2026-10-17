@@ -126,6 +126,7 @@ export function createBackground(deps: BackgroundDeps): Background {
 
   async function lock(): Promise<void> {
     lockEpoch += 1;
+    challenge = null; // ログインの途中の一時トークンも消す（DeepSeek #5）
     unlocked = null;
     vaultKey = null;
     vaultState = 'locked';
@@ -255,7 +256,6 @@ export function createBackground(deps: BackgroundDeps): Background {
 
     async login(m) {
       await lock();
-      challenge = null;
       const req = await createLoginRequest({ clientId: deps.discordClientId, redirectUri: chrome.identity.getRedirectURL() });
       let redirected: string | undefined;
       try {
@@ -304,7 +304,6 @@ export function createBackground(deps: BackgroundDeps): Background {
       // 先に手元を消す（更新の途中でも、遅れて終わった更新は書き戻さない）
       const s = await sessions.get();
       await sessions.clear();
-      challenge = null;
       await lock();
       if (s) {
         try {
