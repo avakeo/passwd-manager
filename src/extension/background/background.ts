@@ -161,8 +161,12 @@ export function createBackground(deps: BackgroundDeps): Background {
     throw new Fail(errors[res.status] ?? (res.status === 429 ? 'RATE_LIMITED' : res.status >= 500 ? 'SERVER' : 'SERVER'));
   }
 
+  // GET /v1/me の id は、ログインの応答で受け取ったメンバー ID と同じでなければならない。違えば止める
+  // （食い違った id で鍵を作ったり、別のメンバーの組に固定と世代を書いたりしない：Codex #4）
   async function getMe(): Promise<{ id: string; role: 'admin' | 'member'; key: MeKey | null; recoveryCodesRemaining: number }> {
+    const session = await sessions.get();
     const body = expect(await api.call('GET', '/v1/me'), 200, { 409: 'ADMIN_NOT_READY', 403: 'FORBIDDEN' });
+    if (!session || body.id !== session.memberId) throw new Fail('MEMBER_MISMATCH');
     return {
       id: String(body.id),
       role: body.role === 'admin' ? 'admin' : 'member',

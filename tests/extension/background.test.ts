@@ -40,7 +40,7 @@ type World = {
   responses: string[];
   calls: string[]; // 拡張機能が API に送った「メソッド パス」
   gates: Map<string, { arrive: () => void; released: Promise<void> }>;
-  rewrite: ((call: string, res: Response) => Promise<Response> | null) | null;
+  rewrite: ((call: string, res: Response) => Promise<Response | null>) | null;
 };
 type Reply = { ok: boolean; error?: string } & Record<string, unknown>;
 
@@ -313,6 +313,26 @@ test('Codex #3 鍵の作成と最初の Vault の途中でロックしても、�
   await send(w, { type: 'lock' }, POPUP);
   initGate.release();
   assert.equal((await initializing).error, 'LOCKED');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
+test('Codex #4 ログインの応答のメンバー ID と GET /v1/me の id が食い違ったら、止めて何も送らず何も保存しない', async () => {
+  const w = world();
+  await loginAndRegisterTotp(w, newDiscordUser(), true);
+  // サーバー（または途中の誰か）が、別のメンバーの id を返す
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/me' || res.status !== 200) return null;
+    const body = (await res.json()) as Record<string, unknown>;
+    return Response.json({ ...body, id: 'member_someone_else' });
+  };
+  const before = w.chrome.storage.local.dump();
+  w.calls.length = 0;
+  assert.equal((await send(w, { type: 'createKey', masterPassword: ADMIN_PASSWORD, replace: false })).error, 'MEMBER_MISMATCH');
+  assert.equal((await send(w, { type: 'unlock', masterPassword: ADMIN_PASSWORD }, POPUP)).error, 'MEMBER_MISMATCH');
+  assert.equal((await send(w, { type: 'status' }, POPUP)).error, 'MEMBER_MISMATCH');
+  assert.deepEqual(w.calls.filter((c) => c !== 'GET /v1/me'), [], '鍵の登録などは送らない');
+  assert.equal(w.chrome.storage.local.dump(), before, '固定も世代も書かない');
+  assert.equal(Number(w.t.db.db.prepare('SELECT COUNT(*) AS n FROM member_keys').get()!.n), 0);
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
 });
 
