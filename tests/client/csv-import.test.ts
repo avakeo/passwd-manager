@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { importCsvPreview } from '../../src/client/csv-import.ts';
+import { importCsvPreview, MAX_CSV_BYTES, MAX_CSV_ROWS } from '../../src/client/csv-import.ts';
 
 test('M-01 CSV Chrome: 引用符・カンマ・改行・二重引用符を解析し、HTTPS URLをそのまま残す', () => {
   const csv = 'name,url,username,password,note\r\n"社内,Wiki",https://wiki.example.com/login?a=1,team@example.com,"a""b","first\nsecond"\r\n';
@@ -64,5 +64,19 @@ test('M-03 空・見出し不足・壊れたCSVも例外で止まらず結果で
     const result = importCsvPreview(source, 'chrome');
     assert.ok(result.errors.length > 0);
   }
+});
+
+test('M-03 CSV全体のUTF-8サイズと物理行数の上限を超えたら解析せず結果で報告する', () => {
+  const header = 'name,url,username,password\n';
+  const tooLarge = header + 'A,https://a.example,u,' + 'x'.repeat(MAX_CSV_BYTES);
+  assert.deepEqual(importCsvPreview(tooLarge, 'chrome').errors, [{ row: 1, reason: 'CSV too large' }]);
+  const tooManyRows = header + 'A,https://a.example,u,p\n'.repeat(MAX_CSV_ROWS);
+  assert.deepEqual(importCsvPreview(tooManyRows, 'chrome').errors, [{ row: 1, reason: 'too many CSV rows' }]);
+  const atRowLimit = header + 'A,https://a.example,u,p\n'.repeat(MAX_CSV_ROWS - 1);
+  assert.equal(importCsvPreview(atRowLimit, 'chrome').items.length, MAX_CSV_ROWS - 1);
+  const multibyte = header + 'A,https://a.example,u,' + 'あ'.repeat(Math.ceil(MAX_CSV_BYTES / 3));
+  assert.deepEqual(importCsvPreview(multibyte, 'chrome').errors, [{ row: 1, reason: 'CSV too large' }]);
+  const manyUnclosedRows = header + '"broken\n'.repeat(2_000);
+  assert.ok(importCsvPreview(manyUnclosedRows, 'chrome').errors.length > 0);
 });
 

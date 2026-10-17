@@ -4,11 +4,13 @@ import { validateItem, type LoginItem } from './item-data.ts';
 export type CsvFormat = 'chrome' | 'proton' | '1password';
 export type CsvIssue = { row: number; reason: string };
 export type CsvPreview = { items: { row: number; item: LoginItem; duplicate: boolean; passwordChangedFromExisting: boolean }[]; errors: CsvIssue[]; warnings: CsvIssue[] };
+export const MAX_CSV_BYTES = 5 * 1024 * 1024;
+export const MAX_CSV_ROWS = 10_000;
 
 type ParsedRow = { row: number; cells: string[] };
 
 // RFC 4180 形式の最低限の状態機械。壊れた行は物理行末まで飛ばして次へ進む。
-function parseCsv(source: string, lineOffset = 0): { rows: ParsedRow[]; errors: CsvIssue[] } {
+function parseCsv(source: string, lineOffset = 0, recoveryDepth = 0): { rows: ParsedRow[]; errors: CsvIssue[] } {
   const rows: ParsedRow[] = [];
   const errors: CsvIssue[] = [];
   const csv = source.replace(/^\uFEFF/, '');
@@ -46,8 +48,10 @@ function parseCsv(source: string, lineOffset = 0): { rows: ParsedRow[]; errors: 
   if (state === 'quoted') {
     errors.push({ row: start, reason: 'unclosed quoted field' });
     if (recoveryOffset !== undefined) {
-      const recovered = parseCsv(csv.slice(recoveryOffset), start);
-      rows.push(...recovered.rows); errors.push(...recovered.errors);
+      if (recoveryDepth < 32) {
+        const recovered = parseCsv(csv.slice(recoveryOffset), start, recoveryDepth + 1);
+        rows.push(...recovered.rows); errors.push(...recovered.errors);
+      } else errors.push({ row: start, reason: 'CSV recovery limit exceeded' });
     }
   }
   else if (cells.length || cell.length || state === 'after') finish();
@@ -79,6 +83,19 @@ function duplicateKey(item: LoginItem): string {
 
 export function importCsvPreview(csv: string, format: CsvFormat, existing: readonly LoginItem[] = []): CsvPreview {
   if (typeof csv !== 'string' || !['chrome', 'proton', '1password'].includes(format)) return { items: [], errors: [{ row: 1, reason: 'invalid CSV header' }], warnings: [] };
+  if (csv.length > MAX_CSV_BYTES || new TextEncoder().encode(csv).length > MAX_CSV_BYTES) {
+    return { items: [], errors: [{ row: 1, reason: 'CSV too large' }], warnings: [] };
+  }
+  let physicalRows = csv.length > 0 ? 1 : 0;
+  for (let i = 0; i < csv.length; i++) {
+    if (csv[i] === '\r' || csv[i] === '\n') {
+      physicalRows++;
+      if (csv[i] === '\r' && csv[i + 1] === '\n') i++;
+    }
+    if (physicalRows > MAX_CSV_ROWS + 1) break;
+  }
+  if (csv.endsWith('\n') || csv.endsWith('\r')) physicalRows--;
+  if (physicalRows > MAX_CSV_ROWS) return { items: [], errors: [{ row: 1, reason: 'too many CSV rows' }], warnings: [] };
   const parsed = parseCsv(csv);
   const header = parsed.rows.shift();
   if (!header) return { items: [], errors: [...parsed.errors, { row: 1, reason: 'invalid CSV header' }], warnings: [] };
