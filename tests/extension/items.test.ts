@@ -6,6 +6,17 @@ import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
 import { POPUP, adminReady, newDiscord, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
 import { fakeCiphertext } from '../helpers/api.ts';
+import { API_ORIGIN, newDiscordUser } from '../helpers/extension-world.ts';
+import { referenceTotp, stepAt, base32ToBytes } from '../helpers/totp-reference.ts';
+import { chromeTrustStorage } from '../../src/extension/background/storage.ts';
+import { fromBase64Url, toBase64Url } from '../../src/crypto/bytes.ts';
+import { createAdminKey } from '../../src/crypto/member-key.ts';
+import { createGrant } from '../../src/crypto/grant.ts';
+import { encryptItem } from '../../src/crypto/item.ts';
+import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
+import { openTrust, pinSigner } from '../../src/crypto/signer.ts';
+import { generateVaultKeyRaw, importVaultKey } from '../../src/crypto/vault-key.ts';
+import { newTrust } from '../helpers/trust.ts';
 
 const T0 = 1_800_000_000_000;
 mock.timers.enable({ apis: ['Date'], now: T0 });
@@ -197,4 +208,58 @@ test('I-02 復号できない、または形の合わないアイテムは「読
   const items = await list(w);
   assert.deepEqual(items.map((i) => [i.id, i.unreadable, i.title]), [['item_ZZZZZZZZZZZZZZZZZZZZZZ', true, '']]);
   assert.equal((await send(w, { type: 'getItem', id: 'item_ZZZZZZZZZZZZZZZZZZZZZZ' })).error, 'UNREADABLE');
+});
+
+test('I-02 正しく復号できても、中身の形が合わないアイテム（知らない項目、http の URL）は「読めないアイテム」にする', async () => {
+  // Vault 鍵をテストの側で持つため、管理者と最初の Vault をテストの中で作り、メンバーの端末を承認済みにする
+  const w = world(discord);
+  const admin = await w.t.addMember('active', { role: 'admin' });
+  const adminKey = await createAdminKey('admin-hoshi-sora-umi-42');
+  w.t.db.db
+    .prepare(`INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
+                                       kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'PBKDF2-HMAC-SHA256', '{"iterations":600000,"normalization":"NFC"}', ?, 1, 'active', 0)`)
+    .run(adminKey.record.keyId, admin.id, toBase64Url(adminKey.record.publicKey), toBase64Url(adminKey.record.encryptedPrivateKey),
+      toBase64Url(adminKey.record.signPublicKey), toBase64Url(adminKey.record.encryptedSignPrivateKey), toBase64Url(adminKey.record.kdf.salt));
+  w.t.db.db.exec(`INSERT INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1);
+                  INSERT INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
+  const userId = newDiscordUser(discord);
+  w.chrome.loginAs = userId;
+  await send(w, { type: 'login', deviceLabel: 'テスト端末' }, POPUP);
+  const start = await send(w, { type: 'totpSetupStart' });
+  await send(w, { type: 'totpSetupConfirm', code: referenceTotp(base32ToBytes(String(start.secret).replace(/ /g, '')), stepAt(Date.now())) });
+  const MEMBER_PASSWORD = 'member-kawa-mori-yama-18';
+  await send(w, { type: 'createKey', masterPassword: MEMBER_PASSWORD, replace: false });
+  const memberId = String(w.t.db.db.prepare('SELECT id FROM members WHERE discord_user_id = ?').get(userId)!.id);
+  const row = w.t.db.db.prepare(`SELECT id, ecdh_public_key AS pk FROM member_keys WHERE member_id = ? AND status = 'active'`).get(memberId)!;
+  const raw = generateVaultKeyRaw();
+  const vaultKey = await importVaultKey(raw.slice());
+  const adminTrust = newTrust(admin.id);
+  await pinSigner(adminTrust, { memberId: admin.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey }, 1);
+  const pins = new MemoryPinStore();
+  const recipient = { keyId: String(row.id), publicKey: fromBase64Url(String(row.pk)) };
+  await pinPublicKey(pins, memberId, recipient);
+  const grant = await createGrant({ pins, signer: { memberId: admin.id, keyId: adminKey.record.keyId, privateKey: adminKey.signPrivateKey, trust: adminTrust }, memberId, recipient, vaultKeyVersion: 1, vaultKeyRaw: raw });
+  w.t.db.db
+    .prepare(`INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at) VALUES (1, ?, ?, ?, ?, ?, 1, 0)`)
+    .run(grant.recipientKeyId, toBase64Url(grant.ephemeralPublicKey), toBase64Url(grant.wrappedKey), grant.signerKeyId, toBase64Url(grant.signature));
+  w.t.db.db.prepare(`UPDATE members SET status = 'active' WHERE id = ?`).run(memberId);
+  await pinSigner(openTrust(chromeTrustStorage(w.chrome.storage.local), { apiOrigin: API_ORIGIN, memberId }), { memberId: admin.id, keyId: adminKey.record.keyId, publicKey: adminKey.record.signPublicKey }, 1);
+  await send(w, { type: 'lock' }, POPUP);
+  assert.equal((await send(w, { type: 'unlock', masterPassword: MEMBER_PASSWORD }, POPUP)).vault, 'ready');
+  // 本物の Vault 鍵で暗号化したが、形の合わない中身（知らない項目、http の URL）
+  const bad: [string, Record<string, unknown>][] = [
+    ['item_SSSSSSSSSSSSSSSSSSSSSS', { type: 'note', title: '形が違う', body: '', script: '<img onerror=x>' }],
+    ['item_TTTTTTTTTTTTTTTTTTTTTT', { type: 'login', title: 'http', username: '', password: 'p', urls: ['http://evil.example.com/'], notes: '', customFields: [] }],
+  ];
+  for (const [i, [id, content]] of bad.entries()) {
+    const ct = await encryptItem(vaultKey, { itemId: id, vaultKeyVersion: 1 }, content as { type: 'note' });
+    w.t.db.db
+      .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES (?, 1, 1, ?, 'x', 0, 'x', 0, ?)`)
+      .run(id, toBase64Url(ct), 50 + i);
+  }
+  assert.equal((await send(w, { type: 'sync' })).ok, true);
+  const items = await list(w);
+  assert.deepEqual(items.map((i) => [i.id, i.unreadable]).sort(), bad.map(([id]) => [id, true]).sort());
+  for (const [id] of bad) assert.equal((await send(w, { type: 'getItem', id })).error, 'UNREADABLE');
 });
