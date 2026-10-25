@@ -4,7 +4,7 @@
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
-import { POPUP, adminReady, newDiscord, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
+import { ADMIN_PASSWORD, POPUP, adminReady, hold, newDiscord, restart, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
 import { fakeCiphertext } from '../helpers/api.ts';
 import { API_ORIGIN, newDiscordUser } from '../helpers/extension-world.ts';
 import { referenceTotp, stepAt, base32ToBytes } from '../helpers/totp-reference.ts';
@@ -51,7 +51,7 @@ async function create(w: World, item: Record<string, unknown> = LOGIN): Promise<
   return String(r.id);
 }
 
-test('I-01 I-02 アイテムを作ると、一覧にはパスワードを出さず、1件を開いたときだけ中身を返す。D1 と storage.local には暗号文だけ', async () => {
+test('アイテムを作ると、一覧にはパスワードを出さず、1件を開いたときだけ中身を返す。D1 と storage.local には暗号文だけ', async () => {
   const w = world(discord);
   await adminReady(w, discord);
   const id = await create(w);
@@ -162,6 +162,27 @@ test('S-09 サーバーが、最後に見たものより古い Vault リビジ�
   assert.equal((await list(w)).length, 2);
 });
 
+test('S-09 キャッシュが容量を超えても、最後に見た Vault リビジョンは残し、起動し直した後の巻き戻しを止める', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  assert.equal((await send(w, { type: 'sync' })).ok, true);
+  // ここから storage.local は暗号文を入れる大きさを書けない
+  w.chrome.storage.local.maxValueLength = 200;
+  await create(w, { type: 'note', title: '2件目', body: '' });
+  assert.equal((await send(w, { type: 'sync' })).ok, true);
+  const seen = Number(w.t.db.db.prepare('SELECT vault_revision AS r FROM vault_meta').get()!.r);
+  restart(w);
+  assert.equal((await send(w, { type: 'unlock', masterPassword: ADMIN_PASSWORD }, POPUP)).ok, true);
+  // 容量超えの前に書けた値（1件目の後）より新しく、今の値より古い Vault リビジョンを返す
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/items') return null;
+    const body = (await res.json()) as Record<string, unknown>;
+    return Response.json({ ...body, vault_revision: seen - 1 });
+  };
+  assert.equal((await send(w, { type: 'sync' })).error, 'ROLLBACK_DETECTED');
+});
+
 test('同期は放置のロックを延ばさない：sync と listItems だけを送り続けても、最後の操作から15分でロックされる', async () => {
   const w = world(discord);
   await adminReady(w, discord);
@@ -194,6 +215,51 @@ test('E-11 ロック中は、アイテムの一覧・取得・保存・削除・
   for (const m of [{ type: 'listItems' }, { type: 'getItem', id }, { type: 'saveItem', item: LOGIN }, { type: 'deleteItem', id, revision: 1 }, { type: 'sync' }]) {
     assert.equal((await send(w, m)).error, 'LOCKED', m.type);
   }
+});
+
+test('E-11 同期が新しい世代の Vault を開き直している間にロックしたら、鍵をメモリに残さず、一覧を断る', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  // 新しい世代（2）のアイテムを1件入れる。今の世代は1のままにして、開き直しそのものは成功させる
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = vault_revision + 1');
+  w.t.db.db
+    .prepare("INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES ('item_RRRRRRRRRRRRRRRRRRRRRR', 1, 2, ?, 'x', 0, 'x', 0, 1000)")
+    .run(fakeCiphertext());
+  const g = hold(w, 'GET /v1/vault');
+  const syncing = send(w, { type: 'sync' });
+  await g.arrived;
+  assert.equal((await send(w, { type: 'lock' }, POPUP)).ok, true);
+  g.release();
+  assert.equal((await syncing).error, 'LOCKED');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
+});
+
+test('E-11 同期で新しい世代の Vault を開き直せなかったら、前の世代の鍵も捨てて、一覧を断る', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  // 今の世代を2にする（世代2のグラントはない）。世代2のアイテムが来ると、開き直しは ready にならない
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = vault_revision + 1, current_vault_key_version = 2');
+  w.t.db.db
+    .prepare("INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES ('item_RRRRRRRRRRRRRRRRRRRRRR', 1, 2, ?, 'x', 0, 'x', 0, 1000)")
+    .run(fakeCiphertext());
+  assert.equal((await send(w, { type: 'sync' })).error, 'VAULT_NOT_READY');
+  assert.equal(w.bg.memoryState().vaultKey, false);
+  assert.notEqual((await send(w, { type: 'status' }, POPUP)).vault, 'ready');
+  assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
+});
+
+test('I-03 作成の 409 が鍵の世代の違い（ローテーションの後）なら、送り直さずにロックして、マスターパスワードを求める', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  w.t.db.db.exec('UPDATE vault_meta SET current_vault_key_version = 2');
+  w.calls.length = 0;
+  const r = await send(w, { type: 'saveItem', item: LOGIN });
+  assert.equal(r.error, 'PASSWORD_REQUIRED');
+  assert.equal(w.calls.filter((c) => c === 'POST /v1/items').length, 1, '新しい ID で送り直さない');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
 });
 
 test('I-02 復号できない、または形の合わないアイテムは「読めないアイテム」として ID だけを出す', async () => {

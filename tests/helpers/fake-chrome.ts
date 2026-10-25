@@ -11,6 +11,8 @@ export const EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop';
 
 export class FakeStorageArea implements StorageArea {
   readonly values = new Map<string, unknown>();
+  // 1つの値の大きさ（JSON の文字数）の上限。超える set は、本物の容量超えと同じく投げて、何も書かない
+  maxValueLength: number | null = null;
 
   async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
     const list = keys === null ? [...this.values.keys()] : typeof keys === 'string' ? [keys] : keys;
@@ -20,6 +22,8 @@ export class FakeStorageArea implements StorageArea {
   }
 
   async set(items: Record<string, unknown>): Promise<void> {
+    const max = this.maxValueLength;
+    if (max !== null && Object.values(items).some((v) => JSON.stringify(v).length > max)) throw new Error('QUOTA_BYTES quota exceeded');
     for (const [k, v] of Object.entries(items)) this.values.set(k, structuredClone(v));
   }
 

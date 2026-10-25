@@ -58,6 +58,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
       state.cacheFull = false;
     } catch {
       state.cacheFull = true;
+      // 暗号文を置けなくても、最後に見た Vault リビジョンは残す（S-09）。カーソルは0にして、起動し直したら全件を取り直す
+      await chrome.storage.local.set({ [syncKey(memberId)]: { cursor: 0, lastVaultRevision: state.lastVaultRevision, items: {} } satisfies CacheRecord }).catch(() => undefined);
     }
   }
 
@@ -82,9 +84,28 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         await lock();
         throw new Fail('PASSWORD_REQUIRED');
       }
-      state.vaultState = await openVault();
-      if (state.vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
-      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      // 開き直している間にロックされたら、openVault が書き戻した鍵を残さない（afterUnlock と同じ確かめ方：Codex #3）
+      let opened: VaultState;
+      try {
+        opened = await openVault();
+      } catch (e) {
+        if (epoch === state.lockEpoch) throw e;
+        await lock();
+        throw new Fail('LOCKED');
+      }
+      if (!(await stillCurrent(epoch))) {
+        await lock();
+        throw new Fail('LOCKED');
+      }
+      state.vaultState = opened;
+      if (state.vaultState !== 'ready') {
+        // 開けなかった（grant-rejected など）なら、前の世代の鍵と一覧も捨てる。状態は afterUnlock で開けなかったときと同じ
+        state.vaultKey = null;
+        state.vaultVersion = null;
+        state.index.clear();
+        state.cacheLoadedFor = null;
+        throw new Fail('VAULT_NOT_READY');
+      }
     }
     let maxSeq = state.cursor;
     for (const i of items) {
@@ -97,6 +118,13 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     state.lastVaultRevision = revision;
     await saveCache(memberId);
     return items.length;
+  }
+
+  // サーバーの今の鍵の世代が、開いている世代と違うか（作成の 409 の原因を分ける：10.2）
+  async function generationChanged(epoch: number): Promise<boolean> {
+    const body = expect(await api.call('GET', '/v1/vault'), 200, { 403: 'FORBIDDEN' });
+    if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+    return Number(body.current_vault_key_version) !== state.vaultVersion;
   }
 
   // 409 のとき：同期してから、今の版を返す（自動で送り直さない：判断待ち 2b-5）
@@ -140,7 +168,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
       await loadCache(memberId);
       const item = m.item as ClientItem; // messages.ts で validateItem を通した、確かめた値だけのオブジェクト
       if (typeof m.id !== 'string') {
-        // 新しく作る。ID は Service Worker が作る（暗号化の前に AAD へ入れる）。ID が重なったら1回だけ作り直す
+        // 新しく作る。ID は Service Worker が作る（暗号化の前に AAD へ入れる）。ID が重なったら1回だけ作り直す（I-03）
+        const epoch = state.lockEpoch;
         for (let attempt = 0; attempt < 2; attempt++) {
           const id = newId('item');
           const ciphertext = await encryptFor(id, item);
@@ -151,6 +180,11 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
             return { ok: true, id, revision: 1 };
           }
           if (res.status !== 409) expect(res, 201, { 413: 'TOO_LARGE', 400: 'BAD_REQUEST' });
+          // 409 は原因で分ける（10.2）。鍵の世代が違うならローテーションの後なので、送り直さずにマスターパスワードを求める
+          if (await generationChanged(epoch)) {
+            await lock();
+            throw new Fail('PASSWORD_REQUIRED');
+          }
         }
         throw new Fail('CONFLICT');
       }
