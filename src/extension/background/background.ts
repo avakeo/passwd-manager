@@ -1,19 +1,20 @@
 // 拡張機能の Service Worker の中身（chrome の API は引数で受け取る。テストは偽物を渡す）。
 // 仕様書「拡張機能と自動入力の方針 > ロックと鍵の置き場所」。
-//   - 秘密鍵・署名用秘密鍵・Vault 鍵は、この中の変数（メモリ）だけに、取り出し不可で置く。画面には渡さない
+//   - 秘密鍵・署名用秘密鍵・Vault 鍵は、createBackground ごとの状態（context.ts。メモリ）だけに、取り出し不可で置く。画面には渡さない
 //   - トークンは chrome.storage.session（storage.ts）。応答には入れない
 //   - 放置のロックは15分。Service Worker が起きたとき（onStartup）と、メッセージを受け取るたびに、処理の前に確かめる
 //   - メッセージは messages.ts の検査を通ったものだけを処理する（E-08）
 //   - アイテム（2b）：保存の前と復号の後に validateItem を通す。storage.local には暗号文だけをキャッシュし、平文の一覧はメモリだけ
 //   - クイックロック解除（2b）：Vault 鍵だけを、パスコード由来の鍵で包んで storage.session に置く。戻った状態は秘密鍵を持たない
 
-import type { ChromeLike, MessageSender } from './chrome-like.ts';
+import type { MessageSender } from './chrome-like.ts';
 import { PASSIVE_TYPES, acceptedSender, parseMessage, type Message } from './messages.ts';
-import { ApiClient, ApiError, type ApiResult } from './api-client.ts';
-import { SessionStore, chromePinStore, chromeTrustStorage, type SessionRecord } from './storage.ts';
-import { grantFromApi, groupBase32, keyBody, keyRecordFromMe, type MeKey } from './api-shapes.ts';
+import { ApiError } from './api-client.ts';
+import { chromePinStore } from './storage.ts';
+import { Fail, LAST_ACTIVITY_KEY, QUICK_UNLOCK_MAX_FAILURES, UNLOCK_KEY_PREFIX, createContext, type BackgroundDeps, type CacheEntry, type CacheRecord, type Reply, type Summary, type Unlocked, type VaultState } from './context.ts';
+import { grantFromApi, groupBase32, keyBody, keyRecordFromMe } from './api-shapes.ts';
 import { createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
-import { fromBase64Url, toBase64Url, wipe, type Bytes } from '../../crypto/bytes.ts';
+import { fromBase64Url, toBase64Url, wipe } from '../../crypto/bytes.ts';
 import { CryptoError } from '../../crypto/errors.ts';
 import { createGrant, openGrant, openGrantForQuickUnlock } from '../../crypto/grant.ts';
 import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts';
@@ -22,15 +23,11 @@ import { newId } from '../../crypto/random.ts';
 import { validateItem, type ClientItem } from '../../client/item-data.ts';
 import { createAdminKey, createMemberKey, unlockAdminKey, unlockMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../crypto/member-key.ts';
 import { pinPublicKey } from '../../crypto/public-key.ts';
-import { assertSignerPinned, openTrust, pinSigner, type GrantTrust, type SignerPin } from '../../crypto/signer.ts';
+import { assertSignerPinned, pinSigner, type SignerPin } from '../../crypto/signer.ts';
 import { generateVaultKeyRaw, importVaultKeyAndWipe } from '../../crypto/vault-key.ts';
 
-export const IDLE_LOCK_MS = 15 * 60 * 1000;
-const LAST_ACTIVITY_KEY = 'teampw/v1/last-activity';
-// ロックで消す、ロック解除のための保存（2b のクイックロック解除が使う）
-export const UNLOCK_KEY_PREFIX = 'teampw/v1/unlock|';
-
-export type VaultState = 'locked' | 'no-key' | 'ready' | 'needs-init' | 'awaiting-approval' | 'needs-generation-init' | 'grant-rejected';
+export { IDLE_LOCK_MS, QUICK_UNLOCK_MAX_FAILURES, UNLOCK_KEY_PREFIX } from './context.ts';
+export type { BackgroundDeps, VaultState } from './context.ts';
 
 export type Background = {
   handleMessage(message: unknown, sender: MessageSender): Promise<Reply>;
@@ -39,127 +36,13 @@ export type Background = {
   memoryState(): { unlocked: boolean; vaultKey: boolean };
 };
 
-type Reply = ({ ok: true } & Record<string, unknown>) | ({ ok: false; error: string } & Record<string, unknown>);
-
-export const QUICK_UNLOCK_MAX_FAILURES = 5;
-
-// 一覧に出す分だけ（パスワード、メモ、カスタム項目は入れない）
-type Summary = { id: string; type: 'login' | 'note' | null; title: string; username?: string; urls?: string[]; unreadable: boolean; revision: number };
-type CacheEntry = { revision: number; vaultKeyVersion: number; ciphertext: string };
-type CacheRecord = { cursor: number; lastVaultRevision: number; items: Record<string, CacheEntry> };
-
-export type BackgroundDeps = {
-  chrome: ChromeLike;
-  apiOrigin: string;
-  discordClientId: string;
-  fetch: (input: string, init: RequestInit) => Promise<Response>;
-};
-
-// ロック解除した鍵（取り出し不可）。秘密鍵は、マスターパスワードで解除したときだけ持つ
-type Unlocked = {
-  memberId: string;
-  role: 'admin' | 'member';
-  keyId: string;
-  publicKey: Bytes;
-  privateKey: CryptoKey;
-  signPublicKey?: Bytes;
-  signPrivateKey?: CryptoKey;
-};
-
-class Fail extends Error {
-  readonly code: string;
-
-  constructor(code: string) {
-    super(code);
-    this.code = code;
-  }
-}
-
 export function createBackground(deps: BackgroundDeps): Background {
-  const { chrome, apiOrigin } = deps;
-  const sessions = new SessionStore(chrome.storage.session);
-  const api = new ApiClient(apiOrigin, deps.fetch, sessions);
-  const trustStorage = chromeTrustStorage(chrome.storage.local);
-
-  // メモリだけに置くもの
-  let unlocked: Unlocked | null = null;
-  let vaultKey: CryptoKey | null = null;
-  let vaultState: VaultState = 'locked';
-  let challenge: { token: string } | null = null; // ログインの途中の一時トークン（TOTP のコードを送るまで）
-  // ロックとログアウトのたびに進める番号。時間のかかる処理（鍵の導出、通信）は、終わった時点で番号が変わっていたら、
-  // 鍵を捨てて何もしない（Codex #3）
-  let lockEpoch = 0;
-  // どの方法で解除したか。パスコードで戻った状態は Vault 鍵だけで、秘密鍵（unlocked）は持たない（E-17）
-  let unlockedBy: 'password' | 'passcode' | null = null;
-  let vaultVersion: number | null = null; // 開いた Vault 鍵の世代
-  // 同期の状態（メモリ）。暗号文は storage.local にもキャッシュする。平文の一覧（summary）はメモリだけ
-  const index = new Map<string, CacheEntry & { summary: Summary }>();
-  let cacheLoadedFor: string | null = null;
-  let cursor = 0;
-  let lastVaultRevision = 0;
-  let cacheFull = false;
-  // クイックロック解除の「試す前に回数を増やして書く」を、1つずつ順に行う（同時に送られても5回を超えない）
-  let quickChain: Promise<unknown> = Promise.resolve();
-
-  async function lock(): Promise<void> {
-    lockEpoch += 1;
-    challenge = null; // ログインの途中の一時トークンも消す（DeepSeek #5）
-    unlocked = null;
-    vaultKey = null;
-    vaultState = 'locked';
-    unlockedBy = null;
-    vaultVersion = null;
-    index.clear();
-    cacheLoadedFor = null;
-    const all = await chrome.storage.session.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(UNLOCK_KEY_PREFIX));
-    if (keys.length > 0) await chrome.storage.session.remove(keys);
-  }
-
-  async function checkIdle(): Promise<void> {
-    const last = (await chrome.storage.session.get(LAST_ACTIVITY_KEY))[LAST_ACTIVITY_KEY];
-    if (typeof last === 'number' && Date.now() - last > IDLE_LOCK_MS) await lock();
-  }
-
-  // 処理を始めたときから、ロックもログアウトも放置の時間切れもないか。終わった時点で確かめる
-  async function stillCurrent(epoch: number): Promise<boolean> {
-    await checkIdle();
-    return epoch === lockEpoch;
-  }
-
-  async function readySession(): Promise<SessionRecord> {
-    const s = await sessions.get();
-    if (!s) throw new Fail('NOT_LOGGED_IN');
-    if (s.totpSetupRequired) throw new Fail('TOTP_SETUP_REQUIRED');
-    return s;
-  }
-
-  function trustFor(memberId: string): GrantTrust {
-    return openTrust(trustStorage, { apiOrigin, memberId });
-  }
-
-  function expect(res: ApiResult, ok: number, errors: Record<number, string> = {}): Record<string, unknown> {
-    if (res.status === ok) return res.body;
-    throw new Fail(errors[res.status] ?? (res.status === 429 ? 'RATE_LIMITED' : res.status >= 500 ? 'SERVER' : 'SERVER'));
-  }
-
-  // GET /v1/me の id は、ログインの応答で受け取ったメンバー ID と同じでなければならない。違えば止める
-  // （食い違った id で鍵を作ったり、別のメンバーの組に固定と世代を書いたりしない：Codex #4）
-  async function getMe(): Promise<{ id: string; role: 'admin' | 'member'; key: MeKey | null; recoveryCodesRemaining: number }> {
-    const session = await sessions.get();
-    const body = expect(await api.call('GET', '/v1/me'), 200, { 409: 'ADMIN_NOT_READY', 403: 'FORBIDDEN' });
-    if (!session || body.id !== session.memberId) throw new Fail('MEMBER_MISMATCH');
-    return {
-      id: String(body.id),
-      role: body.role === 'admin' ? 'admin' : 'member',
-      key: (body.key as MeKey | null) ?? null,
-      recoveryCodesRemaining: Number(body.recovery_codes_remaining ?? 0),
-    };
-  }
+  const ctx = createContext(deps);
+  const { chrome, apiOrigin, sessions, api, state, lock, checkIdle, stillCurrent, readySession, trustFor, expect, getMe } = ctx;
 
   // 自分宛てのグラントを、固定した管理者の鍵で確かめてから開く。開けない理由は状態として返す
   async function openVault(): Promise<VaultState> {
-    const u = unlocked!;
+    const u = state.unlocked!;
     const trust = trustFor(u.memberId);
     if (u.role === 'admin' && u.signPublicKey) {
       const own: SignerPin = { memberId: u.memberId, keyId: u.keyId, publicKey: u.signPublicKey };
@@ -176,13 +59,13 @@ export function createBackground(deps: BackgroundDeps): Background {
     const body = expect(res, 200);
     if (body.grant === null || typeof body.grant !== 'object') return u.role === 'admin' ? 'needs-init' : 'awaiting-approval';
     try {
-      vaultKey = await openGrant(
+      state.vaultKey = await openGrant(
         { memberId: u.memberId, keyId: u.keyId, publicKey: u.publicKey, privateKey: u.privateKey },
         trust,
         grantFromApi(body.grant as Record<string, unknown>),
         Number(body.current_vault_key_version),
       );
-      vaultVersion = Number(body.current_vault_key_version);
+      state.vaultVersion = Number(body.current_vault_key_version);
       return 'ready';
     } catch (e) {
       if (e instanceof CryptoError && e.code === 'SIGNER_NOT_PINNED') return u.role === 'admin' ? 'needs-generation-init' : 'awaiting-approval';
@@ -192,14 +75,14 @@ export function createBackground(deps: BackgroundDeps): Background {
 
   async function afterUnlock(next: Unlocked, epoch: number): Promise<Reply> {
     if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
-    unlocked = next;
-    vaultKey = null;
-    let state: VaultState;
+    state.unlocked = next;
+    state.vaultKey = null;
+    let opened: VaultState;
     try {
-      state = await openVault();
+      opened = await openVault();
     } catch (e) {
       // 開けなかった（通信できない、ログアウトされた）なら、鍵を残さない
-      const interrupted = epoch !== lockEpoch;
+      const interrupted = epoch !== state.lockEpoch;
       await lock();
       throw interrupted ? new Fail('LOCKED') : e;
     }
@@ -207,9 +90,9 @@ export function createBackground(deps: BackgroundDeps): Background {
       await lock();
       throw new Fail('LOCKED');
     }
-    vaultState = state;
-    unlockedBy = 'password';
-    return { ok: true, vault: vaultState };
+    state.vaultState = opened;
+    state.unlockedBy = 'password';
+    return { ok: true, vault: state.vaultState };
   }
 
   // ---- アイテムと同期（2b） ----
@@ -223,7 +106,7 @@ export function createBackground(deps: BackgroundDeps): Background {
   }
 
   async function vaultMember(): Promise<string> {
-    if (vaultKey === null || vaultVersion === null) throw new Fail('LOCKED');
+    if (state.vaultKey === null || state.vaultVersion === null) throw new Fail('LOCKED');
     const s = await readySession();
     return s.memberId;
   }
@@ -239,67 +122,67 @@ export function createBackground(deps: BackgroundDeps): Background {
   }
 
   async function openEntry(id: string, e: CacheEntry): Promise<ClientItem> {
-    if (vaultKey === null || e.vaultKeyVersion !== vaultVersion) throw new Fail('UNREADABLE');
-    const content = await decryptItem(vaultKey, { itemId: id, vaultKeyVersion: e.vaultKeyVersion }, fromBase64Url(e.ciphertext));
+    if (state.vaultKey === null || e.vaultKeyVersion !== state.vaultVersion) throw new Fail('UNREADABLE');
+    const content = await decryptItem(state.vaultKey, { itemId: id, vaultKeyVersion: e.vaultKeyVersion }, fromBase64Url(e.ciphertext));
     return validateItem(content); // 復号した後も、形を確かめる（I-02）
   }
 
   async function loadCache(memberId: string): Promise<void> {
-    if (cacheLoadedFor === memberId) return;
-    index.clear();
+    if (state.cacheLoadedFor === memberId) return;
+    state.index.clear();
     const saved = (await chrome.storage.local.get(syncKey(memberId)))[syncKey(memberId)] as CacheRecord | undefined;
-    cursor = typeof saved?.cursor === 'number' ? saved.cursor : 0;
-    lastVaultRevision = typeof saved?.lastVaultRevision === 'number' ? saved.lastVaultRevision : 0;
-    for (const [id, e] of Object.entries(saved?.items ?? {})) index.set(id, { ...e, summary: await summarize(id, e) });
-    cacheLoadedFor = memberId;
+    state.cursor = typeof saved?.cursor === 'number' ? saved.cursor : 0;
+    state.lastVaultRevision = typeof saved?.lastVaultRevision === 'number' ? saved.lastVaultRevision : 0;
+    for (const [id, e] of Object.entries(saved?.items ?? {})) state.index.set(id, { ...e, summary: await summarize(id, e) });
+    state.cacheLoadedFor = memberId;
   }
 
   // 暗号文だけを書く。容量を超えたら、キャッシュをやめてメモリだけで続ける（判断待ち 2b-4）
   async function saveCache(memberId: string): Promise<void> {
     const items: Record<string, CacheEntry> = {};
-    for (const [id, e] of index) items[id] = { revision: e.revision, vaultKeyVersion: e.vaultKeyVersion, ciphertext: e.ciphertext };
+    for (const [id, e] of state.index) items[id] = { revision: e.revision, vaultKeyVersion: e.vaultKeyVersion, ciphertext: e.ciphertext };
     try {
-      await chrome.storage.local.set({ [syncKey(memberId)]: { cursor, lastVaultRevision, items } satisfies CacheRecord });
-      cacheFull = false;
+      await chrome.storage.local.set({ [syncKey(memberId)]: { cursor: state.cursor, lastVaultRevision: state.lastVaultRevision, items } satisfies CacheRecord });
+      state.cacheFull = false;
     } catch {
-      cacheFull = true;
+      state.cacheFull = true;
     }
   }
 
   async function putEntry(id: string, e: CacheEntry): Promise<void> {
-    index.set(id, { ...e, summary: await summarize(id, e) });
+    state.index.set(id, { ...e, summary: await summarize(id, e) });
   }
 
   // 差分同期（10.3）。巻き戻し（S-09）なら何も書き換えずに止める。削除は暗号文ごと消す（S-02・S-10）
   async function sync(): Promise<number> {
     const memberId = await vaultMember();
-    const epoch = lockEpoch;
+    const epoch = state.lockEpoch;
     await loadCache(memberId);
-    const body = expect(await api.call('GET', `/v1/items?after=${cursor}`), 200);
+    const body = expect(await api.call('GET', `/v1/items?after=${state.cursor}`), 200);
     if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
     const revision = Number(body.vault_revision);
-    if (!Number.isSafeInteger(revision) || revision < lastVaultRevision) throw new Fail('ROLLBACK_DETECTED');
+    if (!Number.isSafeInteger(revision) || revision < state.lastVaultRevision) throw new Fail('ROLLBACK_DETECTED');
     const items = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
     // 新しい世代（ローテーションの後）のアイテムが来た
-    if (items.some((i) => i.deleted !== true && Number(i.vault_key_version) > vaultVersion!)) {
-      if (unlockedBy !== 'password') {
+    if (items.some((i) => i.deleted !== true && Number(i.vault_key_version) > state.vaultVersion!)) {
+      if (state.unlockedBy !== 'password') {
         // パスコードで戻った状態は秘密鍵を持たないので、新しい世代のグラントを開けない。マスターパスワードを求める（E-17）
         await lock();
         throw new Fail('PASSWORD_REQUIRED');
       }
-      vaultState = await openVault();
-      if (vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
+      state.vaultState = await openVault();
+      if (state.vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
       if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
     }
-    let maxSeq = cursor;
+    let maxSeq = state.cursor;
     for (const i of items) {
       const id = String(i.id);
-      if (i.deleted === true || typeof i.ciphertext !== 'string') index.delete(id);
+      if (i.deleted === true || typeof i.ciphertext !== 'string') state.index.delete(id);
       else await putEntry(id, { revision: Number(i.revision), vaultKeyVersion: Number(i.vault_key_version), ciphertext: i.ciphertext });
       maxSeq = Math.max(maxSeq, Number(i.change_seq) || 0);
     }
-    cursor = maxSeq;
-    lastVaultRevision = revision;
+    state.cursor = maxSeq;
+    state.lastVaultRevision = revision;
     await saveCache(memberId);
     return items.length;
   }
@@ -307,14 +190,14 @@ export function createBackground(deps: BackgroundDeps): Background {
   // 409 のとき：同期してから、今の版を返す（自動で送り直さない：判断待ち 2b-5）
   async function conflictReply(id: string): Promise<Reply> {
     await sync();
-    const e = index.get(id);
+    const e = state.index.get(id);
     if (!e) return { ok: false, error: 'DELETED' };
     const current = await openEntry(id, e).catch(() => null);
     return { ok: false, error: 'CONFLICT', current, currentRevision: e.revision };
   }
 
   async function encryptFor(id: string, item: ClientItem): Promise<string> {
-    return toBase64Url(await encryptItem(vaultKey!, { itemId: id, vaultKeyVersion: vaultVersion! }, item as unknown as ItemContent));
+    return toBase64Url(await encryptItem(state.vaultKey!, { itemId: id, vaultKeyVersion: state.vaultVersion! }, item as unknown as ItemContent));
   }
 
   // ---- クイックロック解除（2b、仕様書 A-5） ----
@@ -327,8 +210,8 @@ export function createBackground(deps: BackgroundDeps): Background {
 
   // 順番に1つずつ行う（読む → 比べる → 書く の間に、別の試行が割り込まない）
   function serialized<T>(fn: () => Promise<T>): Promise<T> {
-    const run = quickChain.then(fn);
-    quickChain = run.catch(() => undefined);
+    const run = state.quickChain.then(fn);
+    state.quickChain = run.catch(() => undefined);
     return run;
   }
 
@@ -354,12 +237,12 @@ export function createBackground(deps: BackgroundDeps): Background {
       const quick = s ? parseQuick((await chrome.storage.session.get(quickKey(s.memberId)))[quickKey(s.memberId)]) : null;
       const base = {
         ok: true as const,
-        locked: unlockedBy === null,
-        unlockedBy,
-        vault: unlockedBy === null ? 'locked' : vaultState,
-        loginInProgress: challenge !== null,
+        locked: state.unlockedBy === null,
+        unlockedBy: state.unlockedBy,
+        vault: state.unlockedBy === null ? 'locked' : state.vaultState,
+        loginInProgress: state.challenge !== null,
         quickUnlockAvailable: quick !== null && quick.failures < QUICK_UNLOCK_MAX_FAILURES,
-        cacheFull,
+        cacheFull: state.cacheFull,
       };
       if (!s) return { ...base, loggedIn: false };
       if (s.totpSetupRequired) return { ...base, loggedIn: true, totpSetupRequired: true, member: { id: s.memberId, role: s.role } };
@@ -405,7 +288,7 @@ export function createBackground(deps: BackgroundDeps): Background {
       const member = body.member as { id: string; role: 'admin' | 'member' };
       if (body.status === 'totp_required') {
         await sessions.clear();
-        challenge = { token: String(body.challenge_token) };
+        state.challenge = { token: String(body.challenge_token) };
         return { ok: true, status: 'totp_required' };
       }
       await sessions.set({
@@ -419,10 +302,10 @@ export function createBackground(deps: BackgroundDeps): Background {
     },
 
     async loginTotp(m) {
-      if (!challenge) throw new Fail('NO_LOGIN_IN_PROGRESS');
-      const payload = 'code' in m ? { challenge_token: challenge.token, code: m.code } : { challenge_token: challenge.token, recovery_code: m.recoveryCode };
+      if (!state.challenge) throw new Fail('NO_LOGIN_IN_PROGRESS');
+      const payload = 'code' in m ? { challenge_token: state.challenge.token, code: m.code } : { challenge_token: state.challenge.token, recovery_code: m.recoveryCode };
       const body = expect(await api.publicCall('POST', '/v1/auth/totp', payload), 200, { 401: 'BAD_CODE', 403: 'NOT_ALLOWED' });
-      challenge = null;
+      state.challenge = null;
       const member = body.member as { id: string; role: 'admin' | 'member' };
       await sessions.set({ accessToken: String(body.access_token), refreshToken: String(body.refresh_token), memberId: member.id, role: member.role, totpSetupRequired: false });
       return { ok: true, status: 'ok', recoveryCodesRemaining: Number(body.recovery_codes_remaining ?? 0) };
@@ -466,8 +349,8 @@ export function createBackground(deps: BackgroundDeps): Background {
     },
 
     async createKey(m) {
-      if (unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
-      const epoch = lockEpoch;
+      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      const epoch = state.lockEpoch;
       await readySession();
       const me = await getMe();
       if (me.key !== null && m.replace !== true) throw new Fail('KEY_EXISTS');
@@ -486,7 +369,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     },
 
     async unlock(m) {
-      const epoch = lockEpoch;
+      const epoch = state.lockEpoch;
       await readySession();
       const me = await getMe();
       if (me.key === null) throw new Fail('NO_KEY');
@@ -517,12 +400,12 @@ export function createBackground(deps: BackgroundDeps): Background {
     // 自分の署名鍵を固定し、最後に見た世代を1にしてから作る（暗号コアは、固定と世代がそろうまでグラントを作らない）
     async initVault() {
       await readySession();
-      if (unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
-      if (unlocked === null) throw new Fail('LOCKED');
-      const u = unlocked;
+      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      if (state.unlocked === null) throw new Fail('LOCKED');
+      const u = state.unlocked;
       if (u.role !== 'admin' || !u.signPublicKey || !u.signPrivateKey) throw new Fail('NOT_ADMIN');
-      if (vaultState !== 'needs-init') throw new Fail('VAULT_EXISTS');
-      const epoch = lockEpoch;
+      if (state.vaultState !== 'needs-init') throw new Fail('VAULT_EXISTS');
+      const epoch = state.lockEpoch;
       const trust = trustFor(u.memberId);
       const own: SignerPin = { memberId: u.memberId, keyId: u.keyId, publicKey: u.signPublicKey };
       if ((await trust.signerPins.get()) === undefined) await pinSigner(trust, own, 1);
@@ -554,10 +437,10 @@ export function createBackground(deps: BackgroundDeps): Background {
         );
         const key = await importVaultKeyAndWipe(raw);
         if (!(await stillCurrent(epoch))) throw new Fail('LOCKED'); // 送っている間にロックされた
-        vaultKey = key;
-        vaultVersion = 1;
-        vaultState = 'ready';
-        return { ok: true, vault: vaultState };
+        state.vaultKey = key;
+        state.vaultVersion = 1;
+        state.vaultState = 'ready';
+        return { ok: true, vault: state.vaultState };
       } finally {
         wipe(raw);
       }
@@ -589,11 +472,11 @@ export function createBackground(deps: BackgroundDeps): Background {
     // パスコードの設定：マスターパスワードで解除した後だけ。グラントを取り出し可として開き直し、包んだらすぐ消す
     async setupQuickUnlock(m) {
       await readySession();
-      if (unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
-      if (unlocked === null) throw new Fail('LOCKED');
-      if (vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
-      const u = unlocked;
-      const epoch = lockEpoch;
+      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      if (state.unlocked === null) throw new Fail('LOCKED');
+      if (state.vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
+      const u = state.unlocked;
+      const epoch = state.lockEpoch;
       const body = expect(await api.call('GET', '/v1/vault'), 200);
       if (body.grant === null || typeof body.grant !== 'object') throw new Fail('VAULT_NOT_READY');
       const current = Number(body.current_vault_key_version);
@@ -618,7 +501,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     async quickUnlock(m) {
       const s = await sessions.get();
       if (!s) throw new Fail('NOT_LOGGED_IN');
-      const epoch = lockEpoch;
+      const epoch = state.lockEpoch;
       const rec = await reserveAttempt(s.memberId);
       if (rec === null) throw new Fail('NO_QUICK_UNLOCK');
       let key: CryptoKey;
@@ -638,12 +521,12 @@ export function createBackground(deps: BackgroundDeps): Background {
         const now = parseQuick((await chrome.storage.session.get(k))[k]);
         if (now) await chrome.storage.session.set({ [k]: { ...now, failures: 0 } });
       });
-      unlocked = null; // 秘密鍵は戻さない
-      vaultKey = key;
-      vaultVersion = rec.vaultKeyVersion;
-      vaultState = 'ready';
-      unlockedBy = 'passcode';
-      return { ok: true, vault: vaultState };
+      state.unlocked = null; // 秘密鍵は戻さない
+      state.vaultKey = key;
+      state.vaultVersion = rec.vaultKeyVersion;
+      state.vaultState = 'ready';
+      state.unlockedBy = 'passcode';
+      return { ok: true, vault: state.vaultState };
     },
 
     async sync() {
@@ -653,7 +536,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     async listItems() {
       const memberId = await vaultMember();
       await loadCache(memberId);
-      const items = [...index.values()].map((e) => e.summary).sort((a, b) => a.title.localeCompare(b.title, 'ja') || a.id.localeCompare(b.id));
+      const items = [...state.index.values()].map((e) => e.summary).sort((a, b) => a.title.localeCompare(b.title, 'ja') || a.id.localeCompare(b.id));
       return { ok: true, items };
     },
 
@@ -661,7 +544,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     async getItem(m) {
       const memberId = await vaultMember();
       await loadCache(memberId);
-      const e = index.get(String(m.id));
+      const e = state.index.get(String(m.id));
       if (!e) throw new Fail('NOT_FOUND');
       const item = await openEntry(String(m.id), e).catch(() => null);
       if (item === null) throw new Fail('UNREADABLE');
@@ -677,9 +560,9 @@ export function createBackground(deps: BackgroundDeps): Background {
         for (let attempt = 0; attempt < 2; attempt++) {
           const id = newId('item');
           const ciphertext = await encryptFor(id, item);
-          const res = await api.call('POST', '/v1/items', { id, vault_key_version: vaultVersion, ciphertext });
+          const res = await api.call('POST', '/v1/items', { id, vault_key_version: state.vaultVersion, ciphertext });
           if (res.status === 201) {
-            await putEntry(id, { revision: 1, vaultKeyVersion: vaultVersion!, ciphertext });
+            await putEntry(id, { revision: 1, vaultKeyVersion: state.vaultVersion!, ciphertext });
             await saveCache(memberId);
             return { ok: true, id, revision: 1 };
           }
@@ -689,14 +572,14 @@ export function createBackground(deps: BackgroundDeps): Background {
       }
       const id = m.id;
       const ciphertext = await encryptFor(id, item);
-      const res = await api.call('PUT', `/v1/items/${id}`, { revision: m.revision, vault_key_version: vaultVersion, ciphertext });
+      const res = await api.call('PUT', `/v1/items/${id}`, { revision: m.revision, vault_key_version: state.vaultVersion, ciphertext });
       if (res.status === 409) return conflictReply(id);
       if (res.status === 404) {
         await sync();
         throw new Fail('NOT_FOUND');
       }
       const body = expect(res, 200, { 413: 'TOO_LARGE', 400: 'BAD_REQUEST' });
-      await putEntry(id, { revision: Number(body.revision), vaultKeyVersion: vaultVersion!, ciphertext });
+      await putEntry(id, { revision: Number(body.revision), vaultKeyVersion: state.vaultVersion!, ciphertext });
       await saveCache(memberId);
       return { ok: true, id, revision: Number(body.revision) };
     },
@@ -712,7 +595,7 @@ export function createBackground(deps: BackgroundDeps): Background {
         throw new Fail('NOT_FOUND');
       }
       expect(res, 200);
-      index.delete(id);
+      state.index.delete(id);
       await saveCache(memberId);
       return { ok: true };
     },
@@ -720,7 +603,7 @@ export function createBackground(deps: BackgroundDeps): Background {
 
   return {
     memoryState() {
-      return { unlocked: unlocked !== null, vaultKey: vaultKey !== null };
+      return { unlocked: state.unlocked !== null, vaultKey: state.vaultKey !== null };
     },
 
     async onStartup() {
