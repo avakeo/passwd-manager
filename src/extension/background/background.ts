@@ -348,7 +348,14 @@ export function createBackground(deps: BackgroundDeps): Background {
         throw new Fail('LOCKED');
       }
       vaultState = opened;
-      if (vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
+      if (vaultState !== 'ready') {
+        // 開けなかった（grant-rejected など）なら、前の世代の鍵と一覧も捨てる。状態は afterUnlock で開けなかったときと同じ
+        vaultKey = null;
+        vaultVersion = null;
+        index.clear();
+        cacheLoadedFor = null;
+        throw new Fail('VAULT_NOT_READY');
+      }
     }
     let maxSeq = cursor;
     for (const i of items) {

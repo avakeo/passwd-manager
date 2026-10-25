@@ -215,6 +215,21 @@ test('E-11 同期が新しい世代の Vault を開き直している間にロ�
   assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
 });
 
+test('E-11 同期で新しい世代の Vault を開き直せなかったら、前の世代の鍵も捨てて、一覧を断る', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  // 今の世代を2にする（世代2のグラントはない）。世代2のアイテムが来ると、開き直しは ready にならない
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = vault_revision + 1, current_vault_key_version = 2');
+  w.t.db.db
+    .prepare("INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES ('item_RRRRRRRRRRRRRRRRRRRRRR', 1, 2, ?, 'x', 0, 'x', 0, 1000)")
+    .run(fakeCiphertext());
+  assert.equal((await send(w, { type: 'sync' })).error, 'VAULT_NOT_READY');
+  assert.equal(w.bg.memoryState().vaultKey, false);
+  assert.notEqual((await send(w, { type: 'status' }, POPUP)).vault, 'ready');
+  assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
+});
+
 test('I-03 作成の 409 が鍵の世代の違い（ローテーションの後）なら、送り直さずにロックして、マスターパスワードを求める', async () => {
   const w = world(discord);
   await adminReady(w, discord);
