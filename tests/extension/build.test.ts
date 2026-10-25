@@ -52,3 +52,10 @@ test('HTML として解釈しない：拡張機能の画面のコードに inner
     if (f.endsWith('.html')) assert.ok(!/<script(?![^>]*\bsrc=)/.test(text) && !/\son[a-z]+=/i.test(text), `${f}：インラインのスクリプトとイベント属性を書かない`);
   }
 });
+
+test('E-16 storage.session は既定の設定（信頼されたページだけ）のまま使う：拡張機能のコードに setAccessLevel がない', () => {
+  const root = new URL('../../src/extension/', import.meta.url);
+  const files = readdirSync(root, { recursive: true }).map((p) => p.replace(/\\/g, '/')).filter((p) => /\.(ts|html)$/.test(p));
+  assert.ok(files.some((f) => f.endsWith('background/background.ts')));
+  for (const f of files) assert.ok(!/setAccessLevel/.test(readFileSync(new URL(f, root), 'utf8')), f);
+});
