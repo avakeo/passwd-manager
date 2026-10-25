@@ -11,15 +11,15 @@ import type { ChromeLike, MessageSender } from './chrome-like.ts';
 import { PASSIVE_TYPES, acceptedSender, parseMessage, type Message } from './messages.ts';
 import { ApiClient, ApiError, type ApiResult } from './api-client.ts';
 import { SessionStore, chromePinStore, chromeTrustStorage, type SessionRecord } from './storage.ts';
+import { grantFromApi, groupBase32, keyBody, keyRecordFromMe, type MeKey } from './api-shapes.ts';
 import { createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
 import { fromBase64Url, toBase64Url, wipe, type Bytes } from '../../crypto/bytes.ts';
 import { CryptoError } from '../../crypto/errors.ts';
-import { createGrant, openGrant, openGrantForQuickUnlock, type Grant } from '../../crypto/grant.ts';
+import { createGrant, openGrant, openGrantForQuickUnlock } from '../../crypto/grant.ts';
 import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts';
 import { openQuickUnlock, sealQuickUnlock, type QuickUnlockRecord } from '../../crypto/quick-unlock.ts';
 import { newId } from '../../crypto/random.ts';
 import { validateItem, type ClientItem } from '../../client/item-data.ts';
-import type { KdfParams } from '../../crypto/kdf.ts';
 import { createAdminKey, createMemberKey, unlockAdminKey, unlockMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../crypto/member-key.ts';
 import { pinPublicKey } from '../../crypto/public-key.ts';
 import { assertSignerPinned, openTrust, pinSigner, type GrantTrust, type SignerPin } from '../../crypto/signer.ts';
@@ -66,8 +66,6 @@ type Unlocked = {
   signPrivateKey?: CryptoKey;
 };
 
-type MeKey = Record<string, string | number | null>;
-
 class Fail extends Error {
   readonly code: string;
 
@@ -75,51 +73,6 @@ class Fail extends Error {
     super(code);
     this.code = code;
   }
-}
-
-function groupBase32(s: string): string {
-  return s.replace(/(.{4})(?=.)/g, '$1 ');
-}
-
-function keyRecordFromMe(key: MeKey): MemberKeyRecord | AdminKeyRecord {
-  const params = JSON.parse(String(key.kdf_params)) as { iterations: number; normalization: KdfParams['normalization'] };
-  const base: MemberKeyRecord = {
-    keyId: String(key.id),
-    publicKey: fromBase64Url(String(key.ecdh_public_key)),
-    encryptedPrivateKey: fromBase64Url(String(key.encrypted_private_key)),
-    kdf: { algorithm: String(key.kdf_algorithm) as KdfParams['algorithm'], iterations: params.iterations, normalization: params.normalization, salt: fromBase64Url(String(key.kdf_salt)) },
-  };
-  if (typeof key.ecdsa_public_key !== 'string' || typeof key.encrypted_sign_private_key !== 'string') return base;
-  return { ...base, signPublicKey: fromBase64Url(key.ecdsa_public_key), encryptedSignPrivateKey: fromBase64Url(key.encrypted_sign_private_key) };
-}
-
-function keyBody(record: MemberKeyRecord | AdminKeyRecord): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    id: record.keyId,
-    ecdh_public_key: toBase64Url(record.publicKey),
-    encrypted_private_key: toBase64Url(record.encryptedPrivateKey),
-    kdf_algorithm: record.kdf.algorithm,
-    kdf_params: JSON.stringify({ iterations: record.kdf.iterations, normalization: record.kdf.normalization }),
-    kdf_salt: toBase64Url(record.kdf.salt),
-    format_version: 1,
-  };
-  if ('signPublicKey' in record) {
-    body.ecdsa_public_key = toBase64Url(record.signPublicKey);
-    body.encrypted_sign_private_key = toBase64Url(record.encryptedSignPrivateKey);
-  }
-  return body;
-}
-
-function grantFromApi(g: Record<string, unknown>): Grant {
-  return {
-    vaultKeyVersion: Number(g.vault_key_version),
-    recipientKeyId: String(g.recipient_key_id),
-    ephemeralPublicKey: fromBase64Url(String(g.ephemeral_public_key)),
-    wrappedKey: fromBase64Url(String(g.wrapped_key)),
-    signerKeyId: String(g.signer_key_id),
-    signature: fromBase64Url(String(g.signature)),
-    formatVersion: Number(g.format_version),
-  };
 }
 
 export function createBackground(deps: BackgroundDeps): Background {
