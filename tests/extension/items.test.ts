@@ -4,7 +4,7 @@
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
-import { POPUP, adminReady, hold, newDiscord, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
+import { ADMIN_PASSWORD, POPUP, adminReady, hold, newDiscord, restart, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
 import { fakeCiphertext } from '../helpers/api.ts';
 import { API_ORIGIN, newDiscordUser } from '../helpers/extension-world.ts';
 import { referenceTotp, stepAt, base32ToBytes } from '../helpers/totp-reference.ts';
@@ -160,6 +160,27 @@ test('S-09 サーバーが、最後に見たものより古い Vault リビジ�
   assert.deepEqual([r.ok, r.error], [false, 'ROLLBACK_DETECTED']);
   assert.equal(w.chrome.storage.local.dump(), before);
   assert.equal((await list(w)).length, 2);
+});
+
+test('S-09 キャッシュが容量を超えても、最後に見た Vault リビジョンは残し、起動し直した後の巻き戻しを止める', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  assert.equal((await send(w, { type: 'sync' })).ok, true);
+  // ここから storage.local は暗号文を入れる大きさを書けない
+  w.chrome.storage.local.maxValueLength = 200;
+  await create(w, { type: 'note', title: '2件目', body: '' });
+  assert.equal((await send(w, { type: 'sync' })).ok, true);
+  const seen = Number(w.t.db.db.prepare('SELECT vault_revision AS r FROM vault_meta').get()!.r);
+  restart(w);
+  assert.equal((await send(w, { type: 'unlock', masterPassword: ADMIN_PASSWORD }, POPUP)).ok, true);
+  // 容量超えの前に書けた値（1件目の後）より新しく、今の値より古い Vault リビジョンを返す
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/items') return null;
+    const body = (await res.json()) as Record<string, unknown>;
+    return Response.json({ ...body, vault_revision: seen - 1 });
+  };
+  assert.equal((await send(w, { type: 'sync' })).error, 'ROLLBACK_DETECTED');
 });
 
 test('同期は放置のロックを延ばさない：sync と listItems だけを送り続けても、最後の操作から15分でロックされる', async () => {

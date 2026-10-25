@@ -310,6 +310,8 @@ export function createBackground(deps: BackgroundDeps): Background {
       cacheFull = false;
     } catch {
       cacheFull = true;
+      // 暗号文を置けなくても、最後に見た Vault リビジョンは残す（S-09）。カーソルは0にして、起動し直したら全件を取り直す
+      await chrome.storage.local.set({ [syncKey(memberId)]: { cursor: 0, lastVaultRevision, items: {} } satisfies CacheRecord }).catch(() => undefined);
     }
   }
 
