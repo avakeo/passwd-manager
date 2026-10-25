@@ -75,8 +75,6 @@ export type BackgroundState = {
   cursor: number;
   lastVaultRevision: number;
   cacheFull: boolean;
-  // クイックロック解除の「試す前に回数を増やして書く」を、1つずつ順に行う（同時に送られても5回を超えない）
-  quickChain: Promise<unknown>;
 };
 
 export type Context = {
@@ -115,7 +113,6 @@ export function createContext(deps: BackgroundDeps): Context {
     cursor: 0,
     lastVaultRevision: 0,
     cacheFull: false,
-    quickChain: Promise.resolve(),
   };
 
   async function lock(): Promise<void> {

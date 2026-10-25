@@ -12,13 +12,13 @@ import { PASSIVE_TYPES, acceptedSender, parseMessage, type Message } from './mes
 import { ApiError } from './api-client.ts';
 import { chromePinStore } from './storage.ts';
 import { createItemSync } from './item-sync.ts';
-import { Fail, LAST_ACTIVITY_KEY, QUICK_UNLOCK_MAX_FAILURES, UNLOCK_KEY_PREFIX, createContext, type BackgroundDeps, type Handler, type Reply, type Unlocked, type VaultState } from './context.ts';
+import { createPasscode } from './passcode.ts';
+import { Fail, LAST_ACTIVITY_KEY, QUICK_UNLOCK_MAX_FAILURES, createContext, type BackgroundDeps, type Handler, type Reply, type Unlocked, type VaultState } from './context.ts';
 import { grantFromApi, groupBase32, keyBody, keyRecordFromMe } from './api-shapes.ts';
 import { createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
 import { toBase64Url, wipe } from '../../crypto/bytes.ts';
 import { CryptoError } from '../../crypto/errors.ts';
-import { createGrant, openGrant, openGrantForQuickUnlock } from '../../crypto/grant.ts';
-import { openQuickUnlock, sealQuickUnlock, type QuickUnlockRecord } from '../../crypto/quick-unlock.ts';
+import { createGrant, openGrant } from '../../crypto/grant.ts';
 import { createAdminKey, createMemberKey, unlockAdminKey, unlockMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../crypto/member-key.ts';
 import { pinPublicKey } from '../../crypto/public-key.ts';
 import { assertSignerPinned, pinSigner, type SignerPin } from '../../crypto/signer.ts';
@@ -93,42 +93,8 @@ export function createBackground(deps: BackgroundDeps): Background {
     return { ok: true, vault: state.vaultState };
   }
 
-  // ---- クイックロック解除（2b、仕様書 A-5） ----
-
-  function quickKey(memberId: string): string {
-    return `${UNLOCK_KEY_PREFIX}${apiOrigin}|${memberId}`;
-  }
-
-
-  function parseQuick(v: unknown): (QuickUnlockRecord & { failures: number }) | null {
-    const r = v as Partial<QuickUnlockRecord & { failures: number }> | undefined;
-    if (!r || typeof r.salt !== 'string' || typeof r.wrapped !== 'string' || typeof r.iterations !== 'number' || typeof r.vaultKeyVersion !== 'number' || typeof r.failures !== 'number') return null;
-    return { salt: r.salt, wrapped: r.wrapped, iterations: r.iterations, vaultKeyVersion: r.vaultKeyVersion, failures: r.failures };
-  }
-
-  // 順番に1つずつ行う（読む → 比べる → 書く の間に、別の試行が割り込まない）
-  function serialized<T>(fn: () => Promise<T>): Promise<T> {
-    const run = state.quickChain.then(fn);
-    state.quickChain = run.catch(() => undefined);
-    return run;
-  }
-
-  // 試す前に、失敗の回数を1つ増やして書く。すでに5回なら保存を消して null
-  function reserveAttempt(memberId: string): Promise<(QuickUnlockRecord & { failures: number }) | null> {
-    return serialized(async () => {
-      const key = quickKey(memberId);
-      const rec = parseQuick((await chrome.storage.session.get(key))[key]);
-      if (!rec) return null;
-      if (rec.failures >= QUICK_UNLOCK_MAX_FAILURES) {
-        await chrome.storage.session.remove(key);
-        return null;
-      }
-      const next = { ...rec, failures: rec.failures + 1 };
-      await chrome.storage.session.set({ [key]: next });
-      return next;
-    });
-  }
-
+  const passcode = createPasscode(ctx);
+  const { quickKey, parseQuick } = passcode;
   const items = createItemSync(ctx, openVault);
 
   const handlers: Record<Message['type'], Handler> = {
@@ -369,66 +335,7 @@ export function createBackground(deps: BackgroundDeps): Background {
       return { ok: true };
     },
 
-    // パスコードの設定：マスターパスワードで解除した後だけ。グラントを取り出し可として開き直し、包んだらすぐ消す
-    async setupQuickUnlock(m) {
-      await readySession();
-      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
-      if (state.unlocked === null) throw new Fail('LOCKED');
-      if (state.vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
-      const u = state.unlocked;
-      const epoch = state.lockEpoch;
-      const body = expect(await api.call('GET', '/v1/vault'), 200);
-      if (body.grant === null || typeof body.grant !== 'object') throw new Fail('VAULT_NOT_READY');
-      const current = Number(body.current_vault_key_version);
-      const raw = await openGrantForQuickUnlock(
-        { memberId: u.memberId, keyId: u.keyId, publicKey: u.publicKey, privateKey: u.privateKey },
-        trustFor(u.memberId),
-        grantFromApi(body.grant as Record<string, unknown>),
-        current,
-      );
-      let record: QuickUnlockRecord;
-      try {
-        record = await sealQuickUnlock(String(m.passcode), raw, { apiOrigin, memberId: u.memberId, vaultKeyVersion: current });
-      } finally {
-        wipe(raw);
-      }
-      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
-      await serialized(() => chrome.storage.session.set({ [quickKey(u.memberId)]: { ...record, failures: 0 } }));
-      return { ok: true };
-    },
-
-    // パスコードで戻る（E-14）。試す前に回数を増やして書き、5回目の失敗で保存を消す（E-15）
-    async quickUnlock(m) {
-      const s = await sessions.get();
-      if (!s) throw new Fail('NOT_LOGGED_IN');
-      const epoch = state.lockEpoch;
-      const rec = await reserveAttempt(s.memberId);
-      if (rec === null) throw new Fail('NO_QUICK_UNLOCK');
-      let key: CryptoKey;
-      try {
-        key = await openQuickUnlock(String(m.passcode), rec, { apiOrigin, memberId: s.memberId });
-      } catch (e) {
-        if (!(e instanceof CryptoError) || e.code !== 'DECRYPT_FAILED') throw e;
-        if (rec.failures >= QUICK_UNLOCK_MAX_FAILURES) {
-          await serialized(() => chrome.storage.session.remove(quickKey(s.memberId)));
-          throw new Fail('QUICK_UNLOCK_CLEARED');
-        }
-        throw new Fail('BAD_PASSCODE');
-      }
-      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
-      await serialized(async () => {
-        const k = quickKey(s.memberId);
-        const now = parseQuick((await chrome.storage.session.get(k))[k]);
-        if (now) await chrome.storage.session.set({ [k]: { ...now, failures: 0 } });
-      });
-      state.unlocked = null; // 秘密鍵は戻さない
-      state.vaultKey = key;
-      state.vaultVersion = rec.vaultKeyVersion;
-      state.vaultState = 'ready';
-      state.unlockedBy = 'passcode';
-      return { ok: true, vault: state.vaultState };
-    },
-
+    ...passcode.handlers,
     ...items.handlers,
   };
 
