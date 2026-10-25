@@ -215,6 +215,17 @@ test('E-11 同期が新しい世代の Vault を開き直している間にロ�
   assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
 });
 
+test('I-03 作成の 409 が鍵の世代の違い（ローテーションの後）なら、送り直さずにロックして、マスターパスワードを求める', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  w.t.db.db.exec('UPDATE vault_meta SET current_vault_key_version = 2');
+  w.calls.length = 0;
+  const r = await send(w, { type: 'saveItem', item: LOGIN });
+  assert.equal(r.error, 'PASSWORD_REQUIRED');
+  assert.equal(w.calls.filter((c) => c === 'POST /v1/items').length, 1, '新しい ID で送り直さない');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
 test('I-02 復号できない、または形の合わないアイテムは「読めないアイテム」として ID だけを出す', async () => {
   const w = world(discord);
   await adminReady(w, discord);

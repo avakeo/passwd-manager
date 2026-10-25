@@ -75,7 +75,8 @@ export function editorSection(item: Item, id: string | null, revision: number | 
     const mine = form.read();
     const r = await send(id ? { type: 'saveItem', id, revision: rev, item: mine } : { type: 'saveItem', item: mine });
     if (r.ok) return done();
-    if (r.error === 'CONFLICT') return showConflict(mine, r.current as Item | null, Number(r.currentRevision));
+    // 選ばせるのは更新の 409 だけ。作成の CONFLICT（ID が2回重なった）には上書きする相手がない
+    if (r.error === 'CONFLICT' && id) return showConflict(mine, r.current as Item | null, Number(r.currentRevision));
     out.textContent = r.error === 'DELETED' ? 'ほかの端末で削除されました。' : errorText(r.error);
     out.className = 'error';
   });

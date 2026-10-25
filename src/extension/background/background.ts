@@ -364,6 +364,13 @@ export function createBackground(deps: BackgroundDeps): Background {
   }
 
   // 409 のとき：同期してから、今の版を返す（自動で送り直さない：判断待ち 2b-5）
+  // サーバーの今の鍵の世代が、開いている世代と違うか（作成の 409 の原因を分ける：10.2）
+  async function generationChanged(epoch: number): Promise<boolean> {
+    const body = expect(await api.call('GET', '/v1/vault'), 200, { 403: 'FORBIDDEN' });
+    if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+    return Number(body.current_vault_key_version) !== vaultVersion;
+  }
+
   async function conflictReply(id: string): Promise<Reply> {
     await sync();
     const e = index.get(id);
@@ -732,7 +739,8 @@ export function createBackground(deps: BackgroundDeps): Background {
       await loadCache(memberId);
       const item = m.item as ClientItem; // messages.ts で validateItem を通した、確かめた値だけのオブジェクト
       if (typeof m.id !== 'string') {
-        // 新しく作る。ID は Service Worker が作る（暗号化の前に AAD へ入れる）。ID が重なったら1回だけ作り直す
+        // 新しく作る。ID は Service Worker が作る（暗号化の前に AAD へ入れる）。ID が重なったら1回だけ作り直す（I-03）
+        const epoch = lockEpoch;
         for (let attempt = 0; attempt < 2; attempt++) {
           const id = newId('item');
           const ciphertext = await encryptFor(id, item);
@@ -743,6 +751,11 @@ export function createBackground(deps: BackgroundDeps): Background {
             return { ok: true, id, revision: 1 };
           }
           if (res.status !== 409) expect(res, 201, { 413: 'TOO_LARGE', 400: 'BAD_REQUEST' });
+          // 409 は原因で分ける（10.2）。鍵の世代が違うならローテーションの後なので、送り直さずにマスターパスワードを求める
+          if (await generationChanged(epoch)) {
+            await lock();
+            throw new Fail('PASSWORD_REQUIRED');
+          }
         }
         throw new Fail('CONFLICT');
       }
