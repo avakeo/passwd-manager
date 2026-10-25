@@ -4,6 +4,7 @@
 //   - ロックとログアウトのたびに lockEpoch を進める。時間のかかる処理は、終わった時点で stillCurrent で確かめる（Codex #3）
 
 import type { ChromeLike } from './chrome-like.ts';
+import type { Message } from './messages.ts';
 import { ApiClient, type ApiResult } from './api-client.ts';
 import { SessionStore, chromeTrustStorage, type SessionRecord } from './storage.ts';
 import type { MeKey } from './api-shapes.ts';
@@ -20,6 +21,9 @@ export const QUICK_UNLOCK_MAX_FAILURES = 5;
 export type VaultState = 'locked' | 'no-key' | 'ready' | 'needs-init' | 'awaiting-approval' | 'needs-generation-init' | 'grant-rejected';
 
 export type Reply = ({ ok: true } & Record<string, unknown>) | ({ ok: false; error: string } & Record<string, unknown>);
+
+// 1つの種類のメッセージを処理する関数。種類ごとの表は background.ts でまとめる
+export type Handler = (m: Message) => Promise<Reply>;
 
 export type BackgroundDeps = {
   chrome: ChromeLike;
