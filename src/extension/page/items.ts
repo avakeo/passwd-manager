@@ -70,10 +70,9 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   const form = editorFields(item);
   const area = el('div', {}, form.node);
   const save = el('button', { text: id ? '保存' : '作る' });
-  let rev = revision;
   save.addEventListener('click', async () => {
     const mine = form.read();
-    const r = await send(id ? { type: 'saveItem', id, revision: rev, item: mine } : { type: 'saveItem', item: mine });
+    const r = await send(id ? { type: 'saveItem', id, revision, item: mine } : { type: 'saveItem', item: mine });
     if (r.ok) return done();
     // 選ばせるのは更新の 409 だけ。作成の CONFLICT（ID が2回重なった）には上書きする相手がない
     if (r.error === 'CONFLICT' && id) return showConflict(mine, r.current as Item | null, Number(r.currentRevision));
@@ -84,12 +83,10 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   if (id) {
     const del = el('button', { text: '削除', className: 'secondary' });
     del.addEventListener('click', async () => {
-      const r = await send({ type: 'deleteItem', id, revision: rev });
+      const r = await send({ type: 'deleteItem', id, revision });
       if (r.ok) return done();
-      if (r.error === 'CONFLICT') {
-        out.textContent = '先にほかの端末で変更されています。読み直してから、もう一度削除してください。';
-        rev = Number(r.currentRevision);
-      } else out.textContent = errorText(r.error);
+      if (r.error === 'CONFLICT') return showDeleteConflict(r.current as Item | null, Number(r.currentRevision));
+      out.textContent = r.error === 'DELETED' ? 'ほかの端末で削除されました。' : errorText(r.error);
       out.className = 'error';
     });
     actions.append(del);
@@ -97,6 +94,25 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   const cancel = el('button', { text: 'やめる', className: 'secondary' });
   cancel.addEventListener('click', () => done());
   actions.append(cancel);
+
+  // 削除の 409（10.3）：今の版を見せてから、それでも削除するかを聞く。押したときだけ、今のリビジョンで送り直す
+  function showDeleteConflict(current: Item | null, currentRevision: number): void {
+    area.replaceChildren(
+      el('p', { text: '先に変更されています。それでも削除しますか。', className: 'warn' }),
+      el('h3', { text: '今の版（サーバー）' }),
+      current ? editorFields(current).node : el('p', { text: '今の版は読めません。', className: 'error' }),
+    );
+    const keep = el('button', { text: '削除しない', className: 'secondary' });
+    keep.addEventListener('click', () => done());
+    const del = el('button', { text: 'それでも削除する' });
+    del.addEventListener('click', async () => {
+      const r = await send({ type: 'deleteItem', id, revision: currentRevision });
+      if (r.ok) return done();
+      out.textContent = errorText(r.error);
+      out.className = 'error';
+    });
+    actions.replaceChildren(keep, del);
+  }
 
   function showConflict(mine: Item, current: Item | null, currentRevision: number): void {
     area.replaceChildren(
