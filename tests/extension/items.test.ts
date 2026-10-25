@@ -51,7 +51,7 @@ async function create(w: World, item: Record<string, unknown> = LOGIN): Promise<
   return String(r.id);
 }
 
-test('I-01 I-02 アイテムを作ると、一覧にはパスワードを出さず、1件を開いたときだけ中身を返す。D1 と storage.local には暗号文だけ', async () => {
+test('アイテムを作ると、一覧にはパスワードを出さず、1件を開いたときだけ中身を返す。D1 と storage.local には暗号文だけ', async () => {
   const w = world(discord);
   await adminReady(w, discord);
   const id = await create(w);
