@@ -4,7 +4,7 @@
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
-import { POPUP, adminReady, newDiscord, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
+import { POPUP, adminReady, hold, newDiscord, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
 import { fakeCiphertext } from '../helpers/api.ts';
 import { API_ORIGIN, newDiscordUser } from '../helpers/extension-world.ts';
 import { referenceTotp, stepAt, base32ToBytes } from '../helpers/totp-reference.ts';
@@ -194,6 +194,25 @@ test('E-11 ロック中は、アイテムの一覧・取得・保存・削除・
   for (const m of [{ type: 'listItems' }, { type: 'getItem', id }, { type: 'saveItem', item: LOGIN }, { type: 'deleteItem', id, revision: 1 }, { type: 'sync' }]) {
     assert.equal((await send(w, m)).error, 'LOCKED', m.type);
   }
+});
+
+test('E-11 同期が新しい世代の Vault を開き直している間にロックしたら、鍵をメモリに残さず、一覧を断る', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  // 新しい世代（2）のアイテムを1件入れる。今の世代は1のままにして、開き直しそのものは成功させる
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = vault_revision + 1');
+  w.t.db.db
+    .prepare("INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES ('item_RRRRRRRRRRRRRRRRRRRRRR', 1, 2, ?, 'x', 0, 'x', 0, 1000)")
+    .run(fakeCiphertext());
+  const g = hold(w, 'GET /v1/vault');
+  const syncing = send(w, { type: 'sync' });
+  await g.arrived;
+  assert.equal((await send(w, { type: 'lock' }, POPUP)).ok, true);
+  g.release();
+  assert.equal((await syncing).error, 'LOCKED');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal((await send(w, { type: 'listItems' })).error, 'LOCKED');
 });
 
 test('I-02 復号できない、または形の合わないアイテムは「読めないアイテム」として ID だけを出す', async () => {

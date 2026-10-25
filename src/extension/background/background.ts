@@ -334,9 +334,21 @@ export function createBackground(deps: BackgroundDeps): Background {
         await lock();
         throw new Fail('PASSWORD_REQUIRED');
       }
-      vaultState = await openVault();
+      // 開き直している間にロックされたら、openVault が書き戻した鍵を残さない（afterUnlock と同じ確かめ方：Codex #3）
+      let opened: VaultState;
+      try {
+        opened = await openVault();
+      } catch (e) {
+        if (epoch === lockEpoch) throw e;
+        await lock();
+        throw new Fail('LOCKED');
+      }
+      if (!(await stillCurrent(epoch))) {
+        await lock();
+        throw new Fail('LOCKED');
+      }
+      vaultState = opened;
       if (vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
-      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
     }
     let maxSeq = cursor;
     for (const i of items) {
