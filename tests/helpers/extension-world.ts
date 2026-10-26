@@ -116,3 +116,29 @@ export function hold(w: World, call: string): { arrived: Promise<void>; release:
   w.gates.set(call, { arrive, released });
   return { arrived, release };
 }
+
+// obj.name の呼び出しのうち、match が true を返す最初の1回を、結果ができてから呼び出し元へ返す前に止める。
+// 「時間のかかる処理の途中でロックされた」順を作るため（2b の Codex #1〜#3、DeepSeek #2〜#4）
+export function holdResult<T extends object>(obj: T, name: keyof T & string, match: (args: unknown[]) => boolean = () => true) {
+  let arrive!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>((r) => (arrive = r));
+  const released = new Promise<void>((r) => (release = r));
+  const own = Object.hasOwn(obj, name);
+  const original = obj[name] as unknown as (...args: unknown[]) => Promise<unknown>;
+  let fired = false;
+  (obj as Record<string, unknown>)[name] = async function (this: unknown, ...args: unknown[]) {
+    const result = await original.apply(this, args);
+    if (!fired && match(args)) {
+      fired = true;
+      arrive();
+      await released;
+    }
+    return result;
+  };
+  const restore = () => {
+    if (own) (obj as Record<string, unknown>)[name] = original;
+    else delete (obj as Record<string, unknown>)[name];
+  };
+  return { arrived, release, restore };
+}
