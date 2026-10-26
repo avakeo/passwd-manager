@@ -11,7 +11,7 @@ import { validateItem, type ClientItem } from '../../client/item-data.ts';
 import { Fail, type CacheEntry, type CacheRecord, type Context, type Handler, type Reply, type Summary, type VaultState } from './context.ts';
 
 export function createItemSync(ctx: Context, openVault: () => Promise<VaultState>) {
-  const { chrome, apiOrigin, api, state, lock, stillCurrent, readySession, expect } = ctx;
+  const { chrome, apiOrigin, api, state, lock, stillCurrent, alive, readySession, expect } = ctx;
 
   function syncKey(memberId: string): string {
     return `teampw/v1/sync|${apiOrigin}|${memberId}`;
@@ -39,13 +39,18 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     return validateItem(content); // 復号した後も、形を確かめる（I-02）
   }
 
+  // 復号している間にロックされたら、一覧（平文）を書き戻さない（2b Codex #2）
   async function loadCache(memberId: string): Promise<void> {
     if (state.cacheLoadedFor === memberId) return;
-    state.index.clear();
+    const epoch = state.lockEpoch;
     const saved = (await chrome.storage.local.get(syncKey(memberId)))[syncKey(memberId)] as CacheRecord | undefined;
+    const loaded = new Map<string, CacheEntry & { summary: Summary }>();
+    for (const [id, e] of Object.entries(saved?.items ?? {})) loaded.set(id, { ...e, summary: await summarize(id, e) });
+    alive(epoch);
+    state.index.clear();
+    for (const [id, e] of loaded) state.index.set(id, e);
     state.cursor = typeof saved?.cursor === 'number' ? saved.cursor : 0;
     state.lastVaultRevision = typeof saved?.lastVaultRevision === 'number' ? saved.lastVaultRevision : 0;
-    for (const [id, e] of Object.entries(saved?.items ?? {})) state.index.set(id, { ...e, summary: await summarize(id, e) });
     state.cacheLoadedFor = memberId;
   }
 
@@ -63,8 +68,14 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     }
   }
 
-  async function putEntry(id: string, e: CacheEntry): Promise<void> {
-    state.index.set(id, { ...e, summary: await summarize(id, e) });
+  // 復号の後、ロックされていないことと、手元にもっと新しい版がないことを確かめてから置く。
+  // 重なった同期の遅れた応答で、新しい版を古い版に戻さない（2b Codex #3、DeepSeek #2）
+  async function putEntry(id: string, e: CacheEntry, epoch: number): Promise<void> {
+    const summary = await summarize(id, e);
+    alive(epoch);
+    const now = state.index.get(id);
+    if (now && now.revision > e.revision) return;
+    state.index.set(id, { ...e, summary });
   }
 
   // 差分同期（10.3）。巻き戻し（S-09）なら何も書き換えずに止める。削除は暗号文ごと消す（S-02・S-10）
@@ -107,15 +118,22 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         throw new Fail('VAULT_NOT_READY');
       }
     }
-    let maxSeq = state.cursor;
+    // change_seq は書いたときの Vault リビジョンなので、同じ応答の Vault リビジョンを超えない。超えたらカーソルを進めない（2b DeepSeek #6）
+    if (items.some((i) => !Number.isSafeInteger(i.change_seq) || Number(i.change_seq) < 1 || Number(i.change_seq) > revision)) throw new Fail('SERVER');
+    let maxSeq = 0;
     for (const i of items) {
       const id = String(i.id);
-      if (i.deleted === true || typeof i.ciphertext !== 'string') state.index.delete(id);
-      else await putEntry(id, { revision: Number(i.revision), vaultKeyVersion: Number(i.vault_key_version), ciphertext: i.ciphertext });
-      maxSeq = Math.max(maxSeq, Number(i.change_seq) || 0);
+      if (i.deleted === true || typeof i.ciphertext !== 'string') {
+        alive(epoch);
+        const now = state.index.get(id);
+        if (!now || now.revision <= Number(i.revision)) state.index.delete(id);
+      } else await putEntry(id, { revision: Number(i.revision), vaultKeyVersion: Number(i.vault_key_version), ciphertext: i.ciphertext }, epoch);
+      maxSeq = Math.max(maxSeq, Number(i.change_seq));
     }
-    state.cursor = maxSeq;
-    state.lastVaultRevision = revision;
+    alive(epoch);
+    // 重なった同期が先に進めていても、下げない（S-09。最後に見た値を下げる口は作らない）
+    state.cursor = Math.max(state.cursor, maxSeq);
+    state.lastVaultRevision = Math.max(state.lastVaultRevision, revision);
     await saveCache(memberId);
     return items.length;
   }
@@ -154,11 +172,14 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
 
     // 1件を開いたときだけ、中身（パスワードを含む）を返す
     async getItem(m) {
+      const epoch = state.lockEpoch;
       const memberId = await vaultMember();
       await loadCache(memberId);
       const e = state.index.get(String(m.id));
       if (!e) throw new Fail('NOT_FOUND');
       const item = await openEntry(String(m.id), e).catch(() => null);
+      // 復号している間にロックされたら、平文を返さない（2b Codex #2、DeepSeek #4）
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
       if (item === null) throw new Fail('UNREADABLE');
       return { ok: true, item, revision: e.revision };
     },
@@ -175,7 +196,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
           const ciphertext = await encryptFor(id, item);
           const res = await api.call('POST', '/v1/items', { id, vault_key_version: state.vaultVersion, ciphertext });
           if (res.status === 201) {
-            await putEntry(id, { revision: 1, vaultKeyVersion: state.vaultVersion!, ciphertext });
+            if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+            await putEntry(id, { revision: 1, vaultKeyVersion: state.vaultVersion!, ciphertext }, epoch);
             await saveCache(memberId);
             return { ok: true, id, revision: 1 };
           }
@@ -205,7 +227,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         throw new Fail('NOT_FOUND');
       }
       const body = expect(res, 200, { 413: 'TOO_LARGE', 400: 'BAD_REQUEST' });
-      await putEntry(id, { revision: Number(body.revision), vaultKeyVersion: state.vaultVersion!, ciphertext });
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      await putEntry(id, { revision: Number(body.revision), vaultKeyVersion: state.vaultVersion!, ciphertext }, epoch);
       await saveCache(memberId);
       return { ok: true, id, revision: Number(body.revision) };
     },
@@ -214,6 +237,7 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
       const memberId = await vaultMember();
       await loadCache(memberId);
       const id = String(m.id);
+      const epoch = state.lockEpoch;
       const res = await api.call('DELETE', `/v1/items/${id}`, { revision: m.revision });
       if (res.status === 409) return conflictReply(id);
       if (res.status === 404) {
@@ -221,6 +245,7 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         throw new Fail('NOT_FOUND');
       }
       expect(res, 200);
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
       state.index.delete(id);
       await saveCache(memberId);
       return { ok: true };

@@ -84,6 +84,12 @@ export function createPasscode(ctx: Context) {
       const epoch = state.lockEpoch;
       const rec = await reserveAttempt(s.memberId);
       if (rec === null) throw new Fail('NO_QUICK_UNLOCK');
+      // 端末が最後に見た世代より古い世代の保存では戻らない。ローテーションの後なので消して、マスターパスワードを求める（2b DeepSeek #5）
+      const lastSeen = await trustFor(s.memberId).generations.get();
+      if (lastSeen !== undefined && rec.vaultKeyVersion < lastSeen) {
+        await serialized(() => chrome.storage.session.remove(quickKey(s.memberId)));
+        throw new Fail('PASSWORD_REQUIRED');
+      }
       let key: CryptoKey;
       try {
         key = await openQuickUnlock(String(m.passcode), rec, { apiOrigin, memberId: s.memberId });
@@ -101,6 +107,8 @@ export function createPasscode(ctx: Context) {
         const now = parseQuick((await chrome.storage.session.get(k))[k]);
         if (now) await chrome.storage.session.set({ [k]: { ...now, failures: 0 } });
       });
+      // 回数を戻している間にロックされたかもしれない。鍵を置く直前にもう一度確かめる（2b Codex #1、DeepSeek #3）
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
       state.unlocked = null; // 秘密鍵は戻さない
       state.vaultKey = key;
       state.vaultVersion = rec.vaultKeyVersion;

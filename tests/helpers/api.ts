@@ -30,10 +30,11 @@ async function sha256Hex(s: string): Promise<string> {
   return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))));
 }
 
-export function setup() {
-  const db = new SqliteD1();
-  db.db.exec(`INSERT INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1)`);
-  db.db.exec(`INSERT INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
+// beforeMigration で vault_meta などを先に入れた場合は、その行を残す
+export function setup(beforeMigration?: ConstructorParameters<typeof SqliteD1>[0]) {
+  const db = new SqliteD1(beforeMigration);
+  db.db.exec(`INSERT OR IGNORE INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1)`);
+  db.db.exec(`INSERT OR IGNORE INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
   const app = createApp();
   const env = { DB: db, ...TEST_ENV };
   let n = 0; // メンバーの番号（member_1、member_2…）

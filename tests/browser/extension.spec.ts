@@ -86,16 +86,26 @@ test('E-08 E-16 ふつうの Web ページからは、拡張機能にメッセ�
   await page.close();
 });
 
+// 鍵を持たせてから止めるには API が要るので、ここでは「本当に止まり、次のメッセージで起き直した」ことまでを、
+// CDP の Service Worker の状態（stopped → running）で見る。解除した状態から止めると鍵が消えることは、
+// Node の E-14（tests/extension/quick-unlock.test.ts）で確かめている（2b Codex #5）
 test('E-14 Service Worker を止めても、次のメッセージで起き直し、ロック状態から答える', async () => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/extension/popup/popup.html`);
   const cdp = await context.newCDPSession(page);
+  const states: string[] = [];
+  cdp.on('ServiceWorker.workerVersionUpdated', (e: { versions: { scriptURL: string; runningStatus: string }[] }) => {
+    for (const v of e.versions) if (v.scriptURL.startsWith(`chrome-extension://${extensionId}/`)) states.push(v.runningStatus);
+  });
   await cdp.send('ServiceWorker.enable');
   await cdp.send('ServiceWorker.stopAllWorkers');
+  await expect.poll(() => states.at(-1), { timeout: 10_000 }).toBe('stopped');
+  const stoppedAt = states.length;
   const status = await page.evaluate(async () => {
     const runtime = (globalThis as unknown as { chrome: { runtime: { sendMessage(m: unknown): Promise<unknown> } } }).chrome.runtime;
     return runtime.sendMessage({ type: 'status' });
   });
   expect(status).toMatchObject({ ok: true, locked: true, vault: 'locked' });
+  expect(states.slice(stoppedAt), '止まった後に起き直している').toContain('running');
   await page.close();
 });

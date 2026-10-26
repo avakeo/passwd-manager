@@ -88,6 +88,7 @@ export type Context = {
   lock(): Promise<void>;
   checkIdle(): Promise<void>;
   stillCurrent(epoch: number): Promise<boolean>;
+  alive(epoch: number): void;
   readySession(): Promise<SessionRecord>;
   trustFor(memberId: string): GrantTrust;
   expect(res: ApiResult, ok: number, errors?: Record<number, string>): Record<string, unknown>;
@@ -141,6 +142,11 @@ export function createContext(deps: BackgroundDeps): Context {
     return epoch === state.lockEpoch;
   }
 
+  // 待たずに確かめる版。確かめてから書くまでの間に await を挟まない所で使う（2b Codex #2）
+  function alive(epoch: number): void {
+    if (epoch !== state.lockEpoch) throw new Fail('LOCKED');
+  }
+
   async function readySession(): Promise<SessionRecord> {
     const s = await sessions.get();
     if (!s) throw new Fail('NOT_LOGGED_IN');
@@ -171,5 +177,5 @@ export function createContext(deps: BackgroundDeps): Context {
     };
   }
 
-  return { deps, chrome, apiOrigin, sessions, api, trustStorage, state, lock, checkIdle, stillCurrent, readySession, trustFor, expect, getMe };
+  return { deps, chrome, apiOrigin, sessions, api, trustStorage, state, lock, checkIdle, stillCurrent, alive, readySession, trustFor, expect, getMe };
 }

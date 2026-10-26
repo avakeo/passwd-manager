@@ -3,7 +3,7 @@
 
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { POPUP, adminReady, newDiscord, restart, send, world, type World } from '../helpers/extension-world.ts';
+import { POPUP, adminReady, holdResult, newDiscord, restart, send, world, type World } from '../helpers/extension-world.ts';
 import { fromBase64Url } from '../../src/crypto/bytes.ts';
 
 const T0 = 1_800_000_000_000;
@@ -134,4 +134,34 @@ test('パスコードの設定は、マスターパスワードで解除した�
   for (const passcode of ['123', '12345', 'abcd', '１２３４']) assert.equal((await send(w, { type: 'setupQuickUnlock', passcode })).error, 'BAD_REQUEST', passcode);
   await send(w, { type: 'lock' }, POPUP);
   assert.equal((await send(w, { type: 'setupQuickUnlock', passcode: PASSCODE })).error, 'LOCKED');
+});
+
+test('E-14 パスコードで戻る途中（失敗の回数を戻している間）にロックしたら、Vault 鍵を戻さない（2b Codex #1、DeepSeek #3）', async () => {
+  const w = await stoppedWithPasscode();
+  // パスコードの保存を読むのは、試す前の数え上げと、成功した後の回数の戻しの2回。2回目で止める
+  let reads = 0;
+  const gate = holdResult(w.chrome.storage.session, 'get', (args) => typeof args[0] === 'string' && args[0].startsWith('teampw/v1/unlock|') && ++reads === 2);
+  try {
+    const pending = send(w, { type: 'quickUnlock', passcode: PASSCODE }, POPUP);
+    await gate.arrived;
+    assert.equal((await send(w, { type: 'lock' })).ok, true);
+    gate.release();
+    const r = await pending;
+    assert.equal(r.error, 'LOCKED', JSON.stringify(r));
+  } finally {
+    gate.restore();
+  }
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
+});
+
+test('E-14 パスコードの保存の世代が、端末の最後に見た世代より古ければ、戻らずに保存を消してマスターパスワードを求める（2b DeepSeek #5）', async () => {
+  const w = await stoppedWithPasscode();
+  // 同期で世代2のグラントを開き、最後に見た世代が2に上がった後の状態
+  const key = [...w.chrome.storage.local.values.keys()].find((k) => k.startsWith('teampw/v1/trust|') && k.endsWith('|generation'))!;
+  w.chrome.storage.local.values.set(key, '2');
+  const r = await send(w, { type: 'quickUnlock', passcode: PASSCODE }, POPUP);
+  assert.equal(r.error, 'PASSWORD_REQUIRED', JSON.stringify(r));
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal(quickRecord(w), undefined, '古い世代の保存は消す');
 });

@@ -237,3 +237,22 @@ test('W-01 W-02 CORS は https://pw.example.com だけを許可する', async ()
     assert.equal((await pre(origin)).headers.get('access-control-allow-origin'), null, origin);
   }
 });
+
+test('S-02 0003 を当てる前からある行（ふつうの行と削除した行）も、移行の後に after=0 の差分同期で取れる（2b Codex #4）', async () => {
+  const t = setup({
+    '0003_change_seq.sql': (db) => {
+      db.exec(`INSERT INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 7, 1)`);
+      db.prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, deleted_at)
+                  VALUES (?, 1, 1, ?, 'x', 0, 'x', 0, NULL), (?, 2, 1, NULL, 'x', 0, 'x', 0, 1)`)
+        .run('item_AAAAAAAAAAAAAAAAAAAAAA', fakeCiphertext(), 'item_BBBBBBBBBBBBBBBBBBBBBB');
+    },
+  });
+  const alice = await t.addMember('active');
+  const list = await json(await t.request('GET', '/v1/items?after=0', alice.token));
+  const items = list.items as { id: string; deleted: boolean; change_seq: number }[];
+  assert.deepEqual(
+    items.map((i) => [i.id, i.deleted, i.change_seq]),
+    [['item_AAAAAAAAAAAAAAAAAAAAAA', false, 7], ['item_BBBBBBBBBBBBBBBBBBBBBB', true, 7]],
+    '前からある行は、移行のときの Vault リビジョンになる',
+  );
+});

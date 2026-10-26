@@ -4,7 +4,7 @@
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
-import { ADMIN_PASSWORD, POPUP, adminReady, hold, newDiscord, restart, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
+import { ADMIN_PASSWORD, POPUP, adminReady, hold, holdResult, newDiscord, restart, secondDevice, send, world, type World } from '../helpers/extension-world.ts';
 import { fakeCiphertext } from '../helpers/api.ts';
 import { API_ORIGIN, newDiscordUser } from '../helpers/extension-world.ts';
 import { referenceTotp, stepAt, base32ToBytes } from '../helpers/totp-reference.ts';
@@ -282,6 +282,8 @@ test('I-02 復号できない、または形の合わないアイテムは「読
     .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq)
               VALUES ('item_ZZZZZZZZZZZZZZZZZZZZZZ', 1, 1, ?, 'x', 0, 'x', 0, 99)`)
     .run(fakeCiphertext());
+  // change_seq は書いたときの Vault リビジョンなので、Vault リビジョンもそこまで進める（サーバーで書いたときと同じ形）
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = MAX(vault_revision, 99)');
   assert.equal((await send(w, { type: 'sync' })).ok, true);
   const items = await list(w);
   assert.deepEqual(items.map((i) => [i.id, i.unreadable, i.title]), [['item_ZZZZZZZZZZZZZZZZZZZZZZ', true, '']]);
@@ -336,8 +338,91 @@ test('I-02 正しく復号できても、中身の形が合わないアイテム
       .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES (?, 1, 1, ?, 'x', 0, 'x', 0, ?)`)
       .run(id, toBase64Url(ct), 50 + i);
   }
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = MAX(vault_revision, 51)');
   assert.equal((await send(w, { type: 'sync' })).ok, true);
   const items = await list(w);
   assert.deepEqual(items.map((i) => [i.id, i.unreadable]).sort(), bad.map(([id]) => [id, true]).sort());
   for (const [id] of bad) assert.equal((await send(w, { type: 'getItem', id })).error, 'UNREADABLE');
+});
+
+function syncRecord(w: World): { cursor: number; lastVaultRevision: number; items: Record<string, { revision: number }> } {
+  const key = [...w.chrome.storage.local.values.keys()].find((k) => k.startsWith('teampw/v1/sync|'))!;
+  return w.chrome.storage.local.values.get(key) as ReturnType<typeof syncRecord>;
+}
+
+test('E-11 1件を開いている途中（復号の後）にロックしたら、平文を返さない（2b Codex #2、DeepSeek #4）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  const id = await create(w);
+  const gate = holdResult(crypto.subtle, 'decrypt');
+  try {
+    const pending = send(w, { type: 'getItem', id });
+    await gate.arrived;
+    assert.equal((await send(w, { type: 'lock' })).ok, true);
+    gate.release();
+    const r = await pending;
+    assert.deepEqual([r.ok, r.error, r.item], [false, 'LOCKED', undefined]);
+  } finally {
+    gate.restore();
+  }
+});
+
+test('E-11 同期の途中（復号の後）にロックしたら、同期は成功を返さず、一覧の平文を書き戻さない（2b Codex #2）', async () => {
+  const a = world(discord);
+  const admin = await adminReady(a, discord);
+  const b = await secondDevice(a, discord, admin.userId, admin.secret);
+  await create(b);
+  const gate = holdResult(crypto.subtle, 'decrypt');
+  try {
+    const pending = send(a, { type: 'sync' });
+    await gate.arrived;
+    assert.equal((await send(a, { type: 'lock' })).ok, true);
+    gate.release();
+    assert.equal((await pending).error, 'LOCKED');
+  } finally {
+    gate.restore();
+  }
+  assert.deepEqual(a.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
+test('S-09 重なった同期で、遅れて終わった古い応答が、新しい版と最後に見た Vault リビジョンを巻き戻さない（2b Codex #3、DeepSeek #2）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  const id = await create(w, { ...LOGIN, title: '古い' });
+  // 同期 A：古い版（リビジョン1）を受け、復号の後で止まる
+  const gate = holdResult(crypto.subtle, 'decrypt');
+  let a: Promise<Record<string, unknown>>;
+  try {
+    a = send(w, { type: 'sync' });
+    await gate.arrived;
+    // A が止まっている間に、新しい版を保存して、同期 B を終える
+    assert.equal((await send(w, { type: 'saveItem', id, revision: 1, item: { ...LOGIN, title: '新しい' } })).ok, true);
+    assert.equal((await send(w, { type: 'sync' })).ok, true);
+    gate.release();
+    await a;
+  } finally {
+    gate.restore();
+  }
+  const got = await send(w, { type: 'getItem', id });
+  assert.deepEqual([(got.item as { title: string }).title, got.revision], ['新しい', 2]);
+  const rec = syncRecord(w);
+  const seen = Number(w.t.db.db.prepare('SELECT vault_revision AS r FROM vault_meta').get()!.r);
+  assert.deepEqual([rec.lastVaultRevision, rec.cursor, rec.items[id]?.revision], [seen, seen, 2], '最後に見た値とカーソルは下げない');
+});
+
+test('S-02 応答の change_seq が、同じ応答の Vault リビジョンより大きければ、カーソルを進めずに同期を止める（2b DeepSeek #6）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  const before = w.chrome.storage.local.dump();
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/items') return null;
+    const body = (await res.json()) as { items: Record<string, unknown>[] };
+    return Response.json({ ...body, items: body.items.map((i) => ({ ...i, change_seq: 999999 })) });
+  };
+  const r = await send(w, { type: 'sync' });
+  assert.deepEqual([r.ok, r.error], [false, 'SERVER']);
+  assert.equal(w.chrome.storage.local.dump(), before, 'カーソルもキャッシュも書き換えない');
+  w.rewrite = null;
+  assert.equal((await send(w, { type: 'sync' })).received, 1, '正直な応答に戻れば取り直せる');
 });
