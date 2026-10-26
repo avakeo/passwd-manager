@@ -282,6 +282,8 @@ test('I-02 復号できない、または形の合わないアイテムは「読
     .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq)
               VALUES ('item_ZZZZZZZZZZZZZZZZZZZZZZ', 1, 1, ?, 'x', 0, 'x', 0, 99)`)
     .run(fakeCiphertext());
+  // change_seq は書いたときの Vault リビジョンなので、Vault リビジョンもそこまで進める（サーバーで書いたときと同じ形）
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = MAX(vault_revision, 99)');
   assert.equal((await send(w, { type: 'sync' })).ok, true);
   const items = await list(w);
   assert.deepEqual(items.map((i) => [i.id, i.unreadable, i.title]), [['item_ZZZZZZZZZZZZZZZZZZZZZZ', true, '']]);
@@ -336,6 +338,7 @@ test('I-02 正しく復号できても、中身の形が合わないアイテム
       .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES (?, 1, 1, ?, 'x', 0, 'x', 0, ?)`)
       .run(id, toBase64Url(ct), 50 + i);
   }
+  w.t.db.db.exec('UPDATE vault_meta SET vault_revision = MAX(vault_revision, 51)');
   assert.equal((await send(w, { type: 'sync' })).ok, true);
   const items = await list(w);
   assert.deepEqual(items.map((i) => [i.id, i.unreadable]).sort(), bad.map(([id]) => [id, true]).sort());
@@ -405,4 +408,21 @@ test('S-09 重なった同期で、遅れて終わった古い応答が、新し
   const rec = syncRecord(w);
   const seen = Number(w.t.db.db.prepare('SELECT vault_revision AS r FROM vault_meta').get()!.r);
   assert.deepEqual([rec.lastVaultRevision, rec.cursor, rec.items[id]?.revision], [seen, seen, 2], '最後に見た値とカーソルは下げない');
+});
+
+test('S-02 応答の change_seq が、同じ応答の Vault リビジョンより大きければ、カーソルを進めずに同期を止める（2b DeepSeek #6）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  await create(w);
+  const before = w.chrome.storage.local.dump();
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/items') return null;
+    const body = (await res.json()) as { items: Record<string, unknown>[] };
+    return Response.json({ ...body, items: body.items.map((i) => ({ ...i, change_seq: 999999 })) });
+  };
+  const r = await send(w, { type: 'sync' });
+  assert.deepEqual([r.ok, r.error], [false, 'SERVER']);
+  assert.equal(w.chrome.storage.local.dump(), before, 'カーソルもキャッシュも書き換えない');
+  w.rewrite = null;
+  assert.equal((await send(w, { type: 'sync' })).received, 1, '正直な応答に戻れば取り直せる');
 });

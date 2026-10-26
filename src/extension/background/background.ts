@@ -375,6 +375,8 @@ export function createBackground(deps: BackgroundDeps): Background {
         throw new Fail('VAULT_NOT_READY');
       }
     }
+    // change_seq は書いたときの Vault リビジョンなので、同じ応答の Vault リビジョンを超えない。超えたらカーソルを進めない（2b DeepSeek #6）
+    if (items.some((i) => !Number.isSafeInteger(i.change_seq) || Number(i.change_seq) < 1 || Number(i.change_seq) > revision)) throw new Fail('SERVER');
     let maxSeq = 0;
     for (const i of items) {
       const id = String(i.id);
@@ -383,7 +385,7 @@ export function createBackground(deps: BackgroundDeps): Background {
         const now = index.get(id);
         if (!now || now.revision <= Number(i.revision)) index.delete(id);
       } else await putEntry(id, { revision: Number(i.revision), vaultKeyVersion: Number(i.vault_key_version), ciphertext: i.ciphertext }, epoch);
-      maxSeq = Math.max(maxSeq, Number(i.change_seq) || 0);
+      maxSeq = Math.max(maxSeq, Number(i.change_seq));
     }
     alive(epoch);
     // 重なった同期が先に進めていても、下げない（S-09。最後に見た値を下げる口は作らない）
