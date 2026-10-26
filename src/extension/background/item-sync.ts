@@ -120,7 +120,7 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     return items.length;
   }
 
-  // サーバーの今の鍵の世代が、開いている世代と違うか（作成の 409 の原因を分ける：10.2）
+  // サーバーの今の鍵の世代が、開いている世代と違うか（作成と更新の 409 の原因を分ける：10.2）
   async function generationChanged(epoch: number): Promise<boolean> {
     const body = expect(await api.call('GET', '/v1/vault'), 200, { 403: 'FORBIDDEN' });
     if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
@@ -189,9 +189,17 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         throw new Fail('CONFLICT');
       }
       const id = m.id;
+      const epoch = state.lockEpoch;
       const ciphertext = await encryptFor(id, item);
       const res = await api.call('PUT', `/v1/items/${id}`, { revision: m.revision, vault_key_version: state.vaultVersion, ciphertext });
-      if (res.status === 409) return conflictReply(id);
+      if (res.status === 409) {
+        // 作成と同じく原因で分ける（10.2）。鍵の世代の違いは、上書きを選んでも 409 が続くので、選択の画面に回さない
+        if (await generationChanged(epoch)) {
+          await lock();
+          throw new Fail('PASSWORD_REQUIRED');
+        }
+        return conflictReply(id);
+      }
       if (res.status === 404) {
         await sync();
         throw new Fail('NOT_FOUND');
