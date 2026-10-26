@@ -262,6 +262,18 @@ test('I-03 作成の 409 が鍵の世代の違い（ローテーションの後�
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
 });
 
+test('S-01 更新の 409 が鍵の世代の違い（ローテーションの後）なら、選択の画面に回さずにロックして、マスターパスワードを求める', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  const id = await create(w);
+  w.t.db.db.exec('UPDATE vault_meta SET current_vault_key_version = 2');
+  w.calls.length = 0;
+  const r = await send(w, { type: 'saveItem', id, revision: 1, item: { ...LOGIN, title: '変更' } });
+  assert.equal(r.error, 'PASSWORD_REQUIRED');
+  assert.equal(w.calls.filter((c) => c === `PUT /v1/items/${id}`).length, 1, '送り直さない');
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+});
+
 test('I-02 復号できない、または形の合わないアイテムは「読めないアイテム」として ID だけを出す', async () => {
   const w = world(discord);
   await adminReady(w, discord);
