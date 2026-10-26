@@ -154,3 +154,14 @@ test('E-14 パスコードで戻る途中（失敗の回数を戻している間
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
   assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
 });
+
+test('E-14 パスコードの保存の世代が、端末の最後に見た世代より古ければ、戻らずに保存を消してマスターパスワードを求める（2b DeepSeek #5）', async () => {
+  const w = await stoppedWithPasscode();
+  // 同期で世代2のグラントを開き、最後に見た世代が2に上がった後の状態
+  const key = [...w.chrome.storage.local.values.keys()].find((k) => k.startsWith('teampw/v1/trust|') && k.endsWith('|generation'))!;
+  w.chrome.storage.local.values.set(key, '2');
+  const r = await send(w, { type: 'quickUnlock', passcode: PASSCODE }, POPUP);
+  assert.equal(r.error, 'PASSWORD_REQUIRED', JSON.stringify(r));
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal(quickRecord(w), undefined, '古い世代の保存は消す');
+});

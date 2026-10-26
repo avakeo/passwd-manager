@@ -717,6 +717,12 @@ export function createBackground(deps: BackgroundDeps): Background {
       const epoch = lockEpoch;
       const rec = await reserveAttempt(s.memberId);
       if (rec === null) throw new Fail('NO_QUICK_UNLOCK');
+      // 端末が最後に見た世代より古い世代の保存では戻らない。ローテーションの後なので消して、マスターパスワードを求める（2b DeepSeek #5）
+      const lastSeen = await trustFor(s.memberId).generations.get();
+      if (lastSeen !== undefined && rec.vaultKeyVersion < lastSeen) {
+        await serialized(() => chrome.storage.session.remove(quickKey(s.memberId)));
+        throw new Fail('PASSWORD_REQUIRED');
+      }
       let key: CryptoKey;
       try {
         key = await openQuickUnlock(String(m.passcode), rec, { apiOrigin, memberId: s.memberId });
