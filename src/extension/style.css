@@ -6,6 +6,7 @@
   --warn: #8a5a00;
   --error: #b3261e;
   --line: #d8dce3;
+  --ok: #1f7a3a;
   color-scheme: light dark;
 }
 
@@ -18,6 +19,7 @@
     --warn: #f0b84a;
     --error: #ff8a80;
     --line: #333a46;
+    --ok: #6fd08c;
   }
 }
 
@@ -142,4 +144,124 @@ li {
 .generator input[type='range'] {
   padding: 0;
   border: 0;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.item-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.item-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  margin: 0;
+}
+
+.item-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.item-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+details.settings {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+details.settings summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+details.settings section:first-of-type {
+  margin-top: 8px;
+}
+
+/* 欄の横に並べるボタンは縮めず、1行のまま出す（「表示」「自動作成」が縦に折れないように） */
+.row > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row > button {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 強度の色分け：弱いは赤、普通は黄、強いは緑 */
+.strength-weak {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.strength-fair {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.strength-strong {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+/* 自動作成のトグル。左にスイッチ、右に名前 */
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  cursor: pointer;
+}
+
+input.switch {
+  appearance: none;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--line);
+  position: relative;
+  cursor: pointer;
+}
+
+input.switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+
+input.switch:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input.switch:checked::before {
+  left: 18px;
 }

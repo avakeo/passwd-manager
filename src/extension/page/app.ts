@@ -174,7 +174,8 @@ async function render(notice?: string): Promise<void> {
   const recovery = recoveryNotice(s.recoveryCodesRemaining);
   if (recovery) root.append(el('p', { text: recovery, className: 'warn' }));
   const member = s.member as { role: string };
-  root.append(el('p', { text: `役割：${member.role === 'admin' ? '管理者' : 'メンバー'}　状態：${String(s.vault)}`, className: 'muted' }));
+  const header = el('div', { className: 'page-header' }, el('p', { text: `役割：${member.role === 'admin' ? '管理者' : 'メンバー'}　状態：${String(s.vault)}`, className: 'muted' }));
+  root.append(header);
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
   if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
@@ -190,11 +191,14 @@ async function render(notice?: string): Promise<void> {
     };
     await showList();
     root.append(slot);
-    if (s.unlockedBy === 'password') root.append(passcodeSection(() => void render()));
   }
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
-  root.append(stepUpSection(), await sessionsSection(), totpSection(true));
-  if (s.hasKey === true) root.append(keySection(true));
+  // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
+  const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
+  if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
+  settings.append(stepUpSection(), await sessionsSection(), totpSection(true));
+  if (s.hasKey === true) settings.append(keySection(true));
+  root.append(settings);
   const lock = el('button', { text: 'ロック', className: 'secondary' });
   lock.addEventListener('click', async () => {
     await send({ type: 'lock' });
@@ -205,8 +209,9 @@ async function render(notice?: string): Promise<void> {
     await send({ type: 'logout' });
     await render();
   });
-  root.append(el('div', {}, lock, logout));
-  const target = document.getElementById(location.hash.slice(1));
+  header.append(el('div', { className: 'row' }, lock, logout));
+  const target = location.hash.length > 1 ? document.getElementById(location.hash.slice(1)) : null;
+  if (target && settings.contains(target)) settings.open = true;
   if (target) target.scrollIntoView();
 }
 

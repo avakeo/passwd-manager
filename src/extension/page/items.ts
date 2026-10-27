@@ -22,7 +22,7 @@ function secretInput(value: string, withGenerator = false): HTMLElement {
   const row = el('div', { className: 'row' }, input, toggle);
   const slot = el('div');
   if (withGenerator) {
-    const create = el('button', { text: '作成', className: 'secondary', type: 'button' });
+    const create = el('button', { text: '自動作成', className: 'secondary', type: 'button' });
     create.addEventListener('click', () => {
       slot.replaceChildren(
         generatorPanel(
@@ -88,7 +88,7 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   const out = el('p', { className: 'note' });
   const form = editorFields(item);
   const area = el('div', {}, form.node);
-  const save = el('button', { text: id ? '保存' : '作る' });
+  const save = el('button', { text: id ? '保存' : '作成' });
   save.addEventListener('click', async () => {
     const mine = form.read();
     const r = await send(id ? { type: 'saveItem', id, revision, item: mine } : { type: 'saveItem', item: mine });
@@ -110,7 +110,7 @@ export function editorSection(item: Item, id: string | null, revision: number | 
     });
     actions.append(del);
   }
-  const cancel = el('button', { text: 'やめる', className: 'secondary' });
+  const cancel = el('button', { text: 'キャンセル', className: 'secondary' });
   cancel.addEventListener('click', () => done());
   actions.append(cancel);
 
@@ -165,7 +165,7 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
   }
   const r = await send({ type: 'listItems' });
   const search = el('input', { type: 'search', placeholder: '検索（タイトル、ユーザー名）' });
-  const list = el('ul');
+  const list = el('ul', { className: 'item-list' });
   const items = r.ok ? (r.items as Summary[]) : [];
   const draw = () => {
     const q = search.value.trim().toLowerCase();
@@ -173,7 +173,9 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
       ...items
         .filter((i) => q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q))
         .map((i) => {
-          const li = el('li', {}, el('span', { text: i.unreadable ? `読めないアイテム（${i.id}）` : i.title }), el('span', { text: i.username ? `  ${i.username}` : '', className: 'muted' }));
+          const label = el('div', { className: 'item-label' }, el('span', { text: i.unreadable ? `読めないアイテム（${i.id}）` : i.title || '（タイトルなし）', className: i.unreadable ? 'error' : 'item-title' }));
+          if (i.username) label.append(el('span', { text: i.username, className: 'muted' }));
+          const li = el('li', {}, label);
           if (!i.unreadable) {
             const edit = el('button', { text: '開く', className: 'secondary' });
             edit.addEventListener('click', () => open(i.id, i.type ?? 'login'));
