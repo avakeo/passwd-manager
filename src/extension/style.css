@@ -131,3 +131,15 @@ textarea {
 li {
   margin: 4px 0;
 }
+
+.generator {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 4px 0 8px;
+}
+
+.generator input[type='range'] {
+  padding: 0;
+  border: 0;
+}

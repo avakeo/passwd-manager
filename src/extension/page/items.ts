@@ -3,6 +3,7 @@
 // パスワードと非表示の項目は伏せ字の欄に入れ、「表示」を押したときだけ文字にする。
 
 import { el, errorText, send } from '../shared/ui.ts';
+import { generatorPanel } from './generator.ts';
 
 type Summary = { id: string; type: 'login' | 'note' | null; title: string; username?: string; unreadable: boolean; revision: number };
 type CustomField = { type: 'text' | 'hidden' | 'date'; label: string; value: string };
@@ -10,14 +11,32 @@ type LoginItem = { type: 'login'; title: string; username: string; password: str
 type NoteItem = { type: 'note'; title: string; body: string };
 type Item = LoginItem | NoteItem;
 
-function secretInput(value: string): HTMLElement {
+// withGenerator のときは「作成」のボタンを足し、自動作成のパネルを開けるようにする（アイテムのパスワードの欄だけ）
+function secretInput(value: string, withGenerator = false): HTMLElement {
   const input = el('input', { type: 'password', value, autocomplete: 'off' });
   const toggle = el('button', { text: '表示', className: 'secondary', type: 'button' });
   toggle.addEventListener('click', () => {
     input.type = input.type === 'password' ? 'text' : 'password';
     toggle.textContent = input.type === 'password' ? '表示' : '隠す';
   });
-  const wrap = el('div', { className: 'row' }, input, toggle);
+  const row = el('div', { className: 'row' }, input, toggle);
+  const slot = el('div');
+  if (withGenerator) {
+    const create = el('button', { text: '作成', className: 'secondary', type: 'button' });
+    create.addEventListener('click', () => {
+      slot.replaceChildren(
+        generatorPanel(
+          (password) => {
+            input.value = password;
+            slot.replaceChildren();
+          },
+          () => slot.replaceChildren(),
+        ),
+      );
+    });
+    row.append(create);
+  }
+  const wrap = el('div', {}, row, slot);
   (wrap as unknown as { read: () => string }).read = () => input.value;
   return wrap;
 }
@@ -39,7 +58,7 @@ function editorFields(item: Item): { node: HTMLElement; read: () => Item } {
     return { node: el('div', {}, labeled('タイトル', title), labeled('本文', body)), read: () => ({ type: 'note', title: title.value, body: body.value }) };
   }
   const username = el('input', { type: 'text', value: item.username, autocomplete: 'off' });
-  const password = secretInput(item.password);
+  const password = secretInput(item.password, true);
   const urls = el('textarea');
   urls.value = item.urls.join('\n');
   const notes = el('textarea');

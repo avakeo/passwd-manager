@@ -24,12 +24,7 @@ export function passwordEntropyBits(length: number, alphabetSize: number): numbe
   return length * Math.log2(alphabetSize);
 }
 
-export function generatePassword(options: PasswordOptions = {}): string {
-  const length = options.length ?? 20;
-  if (!Number.isSafeInteger(length) || length < 1 || length > 65_532) throw new RangeError('invalid password length');
-  if (options.alphabet !== undefined && [options.lower, options.upper, options.digits, options.symbols].some((v) => v !== undefined)) {
-    throw new RangeError('alphabet and character classes cannot be combined');
-  }
+function classesFor(options: PasswordOptions): string[] {
   let classes = options.alphabet !== undefined ? [options.alphabet] : [
     options.lower !== false ? LOWER : '',
     options.upper !== false ? UPPER : '',
@@ -38,6 +33,21 @@ export function generatePassword(options: PasswordOptions = {}): string {
   ];
   classes = classes.filter((group) => group.length > 0);
   if (options.excludeAmbiguous) classes = classes.map((group) => [...group].filter((c) => !AMBIGUOUS.has(c)).join(''));
+  return classes;
+}
+
+// 強度の表示（passwordEntropyBits）に渡す、使える文字の数。生成と同じ文字の集合から数える
+export function passwordAlphabetSize(options: PasswordOptions): number {
+  return classesFor(options).join('').length;
+}
+
+export function generatePassword(options: PasswordOptions = {}): string {
+  const length = options.length ?? 20;
+  if (!Number.isSafeInteger(length) || length < 1 || length > 65_532) throw new RangeError('invalid password length');
+  if (options.alphabet !== undefined && [options.lower, options.upper, options.digits, options.symbols].some((v) => v !== undefined)) {
+    throw new RangeError('alphabet and character classes cannot be combined');
+  }
+  const classes = classesFor(options);
   if (classes.some((group) => group.length === 0) || length < classes.length) throw new RangeError('password cannot contain every enabled character class');
   const alphabet = classes.join('');
   if (alphabet.length < 2 || alphabet.length > 256 || new Set(alphabet).size !== alphabet.length || [...alphabet].some((c) => c.length !== 1)) {
