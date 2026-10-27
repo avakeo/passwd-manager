@@ -6,7 +6,7 @@ import { CryptoError } from '../../src/crypto/errors.ts';
 import { encodeAeadEnvelope, itemAad, parseAeadEnvelope } from '../../src/crypto/format.ts';
 import { toHex, utf8 } from '../../src/crypto/bytes.ts';
 
-const ctx = { itemId: 'item_3c9a', vaultKeyVersion: 1 };
+const ctx = { itemId: 'item_3c9a', vaultKeyVersion: 1, revision: 1 };
 const login: ItemContent = {
   type: 'login',
   title: '社内Wiki',
@@ -78,6 +78,23 @@ test('C-05 鍵の世代を書き換えると復号に失敗する', async () => 
   const key = await newVaultKey();
   const env = await encryptItem(key, ctx, login);
   await assert.rejects(decryptItem(key, { ...ctx, vaultKeyVersion: 2 }, env), isDecryptFailed);
+});
+
+test('C-26 AAD に入れたのと違うリビジョンで復号すると失敗する（古い暗号文の書き戻し。DeepSeek #1）', async () => {
+  const key = await newVaultKey();
+  const env = await encryptItem(key, { ...ctx, revision: 1 }, login);
+  // 控えた revision 1 の暗号文を、サーバーが revision 3 の行として返す
+  await assert.rejects(decryptItem(key, { ...ctx, revision: 3 }, env), isDecryptFailed);
+  await assert.rejects(decryptItem(key, { ...ctx, revision: 2 }, env), isDecryptFailed);
+  assert.deepEqual(await decryptItem(key, { ...ctx, revision: 1 }, env), login);
+});
+
+test('C-10 形式が v1（0x01）のアイテムは、復号を試さずに拒否する', async () => {
+  const key = await newVaultKey();
+  const env = await encryptItem(key, ctx, login);
+  assert.equal(env[0], 0x02);
+  env[0] = 0x01;
+  await assert.rejects(decryptItem(key, ctx, env), (e: unknown) => e instanceof CryptoError && e.code === 'UNSUPPORTED_FORMAT');
 });
 
 test('別の Vault 鍵では復号に失敗する', async () => {

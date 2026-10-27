@@ -333,7 +333,7 @@ test('I-02 正しく復号できても、中身の形が合わないアイテム
     ['item_TTTTTTTTTTTTTTTTTTTTTT', { type: 'login', title: 'http', username: '', password: 'p', urls: ['http://evil.example.com/'], notes: '', customFields: [] }],
   ];
   for (const [i, [id, content]] of bad.entries()) {
-    const ct = await encryptItem(vaultKey, { itemId: id, vaultKeyVersion: 1 }, content as { type: 'note' });
+    const ct = await encryptItem(vaultKey, { itemId: id, vaultKeyVersion: 1, revision: 1 }, content as { type: 'note' });
     w.t.db.db
       .prepare(`INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq) VALUES (?, 1, 1, ?, 'x', 0, 'x', 0, ?)`)
       .run(id, toBase64Url(ct), 50 + i);
@@ -425,4 +425,29 @@ test('S-02 応答の change_seq が、同じ応答の Vault リビジョンよ�
   assert.equal(w.chrome.storage.local.dump(), before, 'カーソルもキャッシュも書き換えない');
   w.rewrite = null;
   assert.equal((await send(w, { type: 'sync' })).received, 1, '正直な応答に戻れば取り直せる');
+});
+
+test('S-11 盗んだトークンで控えた古い暗号文を今のリビジョンとして書き戻しても、ほかの端末は古い中身を出さず「読めないアイテム」にする（2b DeepSeek #1）', async () => {
+  const a = world(discord);
+  const admin = await adminReady(a, discord);
+  const id = await create(a, { ...LOGIN, password: 'old-password' });
+  const b = await secondDevice(a, discord, admin.userId, admin.secret);
+  // 攻撃者は、盗んだトークンで revision 1 の暗号文を控えておく
+  const memberId = String(a.t.db.db.prepare('SELECT id FROM members').get()!.id);
+  const stolen = await a.t.addSession(memberId, { totpVerifiedAt: Date.now() });
+  const old = ((await (await a.t.request('GET', '/v1/items?after=0', stolen.token)).json()) as { items: { ciphertext: string }[] }).items[0]!.ciphertext;
+  // 利用者がパスワードを変え（revision 2）、もう一方の端末も取り込む
+  assert.equal((await send(a, { type: 'saveItem', id, revision: 1, item: { ...LOGIN, password: 'new-password' } })).ok, true);
+  await send(b, { type: 'sync' });
+  assert.equal(((await send(b, { type: 'getItem', id })).item as { password: string }).password, 'new-password');
+  // 控えた暗号文を今のリビジョンで書き戻す。サーバーは中身を読めないので受け付ける（revision 3）
+  const put = await a.t.request('PUT', `/v1/items/${id}`, stolen.token, { revision: 2, vault_key_version: 1, ciphertext: old });
+  assert.equal(put.status, 200);
+  assert.equal((await send(b, { type: 'sync' })).ok, true);
+  const [summary] = await list(b);
+  assert.deepEqual([summary!.id, summary!.unreadable, summary!.revision], [id, true, 3]);
+  assert.equal((await send(b, { type: 'getItem', id })).error, 'UNREADABLE');
+  // 書いた本人の端末でも、古い中身を出さない
+  await send(a, { type: 'sync' });
+  assert.equal((await send(a, { type: 'getItem', id })).error, 'UNREADABLE');
 });

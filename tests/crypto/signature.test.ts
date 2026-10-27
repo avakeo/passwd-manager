@@ -95,7 +95,7 @@ test('署名付きのグラントを、管理者の署名鍵を固定した C �
   assert.equal(grant.signature[1], ALG_ECDSA_P256_SHA256);
   const trust = await trusted();
   const vaultKey = await openGrant(cOwn(), trust, ...served(grant));
-  const ctx = { itemId: 'item_sig', vaultKeyVersion: 1 };
+  const ctx = { itemId: 'item_sig', vaultKeyVersion: 1, revision: 1 };
   const env = await encryptItem(await importVaultKey(raw), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(vaultKey, ctx, env), { type: 'note', title: 't', body: 'b' });
   assert.equal(await trust.generations.get(), 1, '最後に見た世代が記録される');

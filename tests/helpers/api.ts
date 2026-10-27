@@ -111,7 +111,7 @@ export function setup(beforeMigration?: ConstructorParameters<typeof SqliteD1>[0
 // 512 段のアイテムと同じ長さ（542バイト）の、形だけ正しい暗号文
 export function fakeCiphertext(fill = 0x55): string {
   const b = new Uint8Array(542).fill(fill);
-  b[0] = 0x01;
+  b[0] = 0x02; // アイテムの形式 v2
   b[1] = 0x01;
   return toBase64Url(b);
 }

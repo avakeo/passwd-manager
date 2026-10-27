@@ -1,6 +1,6 @@
 // A-4 アイテムの暗号化と復号。
 // 仕様書「暗号仕様 > アイテムの暗号化」。
-//   JSON → 先頭4バイトに長さ → パディング（512B〜64KB）→ AES-256-GCM（ノンスは毎回乱数、AAD は v1|item|ID|世代）
+//   JSON → 先頭4バイトに長さ → パディング（512B〜64KB）→ AES-256-GCM（ノンスは毎回乱数、AAD は v2|item|ID|世代|リビジョン）
 
 import { fromUtf8, utf8, wipe, type Bytes } from './bytes.ts';
 import { aesGcmDecrypt, aesGcmEncrypt } from './aead.ts';

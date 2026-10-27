@@ -14,7 +14,7 @@ import { readJson } from './json.ts';
 import { HttpProblem, problem } from './problem.ts';
 import type { Principal } from './auth.ts';
 import { fromBase64Url } from '../crypto/bytes.ts';
-import { ALG_AES_256_GCM, FORMAT_V1 } from '../crypto/format.ts';
+import { ALG_AES_256_GCM, FORMAT_V2 } from '../crypto/format.ts';
 
 
 export const WEB_ORIGIN = 'https://pw.example.com'; // 仮の表記。CORS で許可するのはこの1つだけ
@@ -34,8 +34,8 @@ function checkItemCiphertext(ciphertext: unknown): string {
   if (Math.floor((ciphertext.length * 3) / 4) > MAX_ITEM_ENVELOPE) throw new HttpProblem(413);
   const bytes = fromBase64Url(ciphertext);
   if (!ITEM_ENVELOPE_LENGTHS.includes(bytes.length)) throw new HttpProblem(400);
-  // 先頭2バイトが 0x01 0x01（形式 v1、AES-256-GCM）
-  if (bytes[0] !== FORMAT_V1 || bytes[1] !== ALG_AES_256_GCM) throw new HttpProblem(400);
+  // 先頭2バイトが 0x02 0x01（アイテムの形式 v2、AES-256-GCM）
+  if (bytes[0] !== FORMAT_V2 || bytes[1] !== ALG_AES_256_GCM) throw new HttpProblem(400);
   return ciphertext;
 }
 

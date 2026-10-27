@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeCiphertext, setup } from '../helpers/api.ts';
+import { fromBase64Url, toBase64Url } from '../../src/crypto/bytes.ts';
 
 const ITEM_ID = 'item_AAAAAAAAAAAAAAAAAAAAAA';
 
@@ -145,6 +146,13 @@ test('I-01 サイズ上限を超える本文は 413', async () => {
   await expectProblem(await t.request('POST', '/v1/items', alice.token, { id: ITEM_ID, vault_key_version: 1, ciphertext: huge }), 413);
 });
 
+// 長さは正しいが、先頭が形式 v1（0x01）の暗号文
+function v1Ciphertext(): string {
+  const b = fromBase64Url(fakeCiphertext());
+  b[0] = 0x01;
+  return toBase64Url(b);
+}
+
 test('I-02 I-05 不正な JSON、型違い、不正な ID は 400 で、内部の情報を含まない', async () => {
   const t = setup();
   const alice = await t.addMember('active');
@@ -155,6 +163,7 @@ test('I-02 I-05 不正な JSON、型違い、不正な ID は 400 で、内部�
     { id: ITEM_ID, vault_key_version: 1, ciphertext: 'not base64url!' },
     { id: ITEM_ID, vault_key_version: 1, ciphertext: fakeCiphertext(), extra: 1 },
     { id: ITEM_ID, vault_key_version: 1, ciphertext: 'AQE' }, // パディング単位でない長さ
+    { id: ITEM_ID, vault_key_version: 1, ciphertext: v1Ciphertext() }, // 形式が v1（リビジョンを AAD に入れる前の形。C-10）
   ];
   for (const body of bad) {
     const problem = await expectProblem(await t.request('POST', '/v1/items', alice.token, body), 400);

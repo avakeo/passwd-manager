@@ -89,7 +89,7 @@ test('C-13 2人のメンバー間でグラントを作り、受け取った側�
   // 管理者：Vault 鍵（世代1）を作り、アイテムを暗号化し、C さん宛てのグラントを作る
   const vaultKeyRaw = generateVaultKeyRaw();
   const adminVaultKey = await importVaultKey(vaultKeyRaw);
-  const ctx = { itemId: 'item_3c9a', vaultKeyVersion: 1 };
+  const ctx = { itemId: 'item_3c9a', vaultKeyVersion: 1, revision: 1 };
   const item = { type: 'login' as const, title: '社内Wiki', username: 'team@example.com', password: 'Tr7#qLm2!vX9pK' };
   const ciphertext = await encryptItem(adminVaultKey, ctx, item);
   const grant = await grantFor(memberC, 1, vaultKeyRaw);
@@ -174,7 +174,7 @@ test('管理操作では、グラントを開き直して生の Vault 鍵を得�
   const toC = await grantFor(memberC, 1, reopened);
   reopened.fill(0);
   const cKey = await openGrant(ownKey(memberC), await trust(), ...served(toC));
-  const ctx = { itemId: 'item_x', vaultKeyVersion: 1 };
+  const ctx = { itemId: 'item_x', vaultKeyVersion: 1, revision: 1 };
   const env = await encryptItem(await importVaultKey(raw), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(cKey, ctx, env), { type: 'note', title: 't', body: 'b' });
 });
@@ -242,7 +242,7 @@ test('既知解 決まったグラントを、固定の受け手の秘密鍵で�
   const grant: Grant = { ...unsigned, signature: await resign(unsigned, katMember) };
   assert.equal(toHex(await openGrantForAdmin(own, await trust(), ...served(grant))), kat.vaultKey);
   const vaultKey = await openGrant(own, await trust(), ...served(grant));
-  const ctx = { itemId: 'item_kat', vaultKeyVersion: 1 };
+  const ctx = { itemId: 'item_kat', vaultKeyVersion: 1, revision: 1 };
   const env = await encryptItem(await importVaultKey(fromHex(kat.vaultKey)), ctx, { type: 'note', title: 't', body: 'b' });
   assert.deepEqual(await decryptItem(vaultKey, ctx, env), { type: 'note', title: 't', body: 'b' });
 });
