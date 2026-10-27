@@ -1,19 +1,19 @@
 // パスワードの自動作成のパネル（仕様書「パスワード生成」）。文字数はスライダー、文字種と紛らわしい文字の除外はトグル。
 // 作った値は、このページのメモリと入力欄にだけ置く。「使う」を押したときだけ、パスワードの欄に入れる。
 
-import { generatePassword, passwordAlphabetSize, passwordEntropyBits, type PasswordOptions } from '../../client/password.ts';
+import { generatePassword, passwordAlphabetSize, passwordEntropyBits, passwordStrength, type PasswordOptions } from '../../client/password.ts';
 import { el } from '../shared/ui.ts';
 
 const MIN_LENGTH = 8;
 const MAX_LENGTH = 64;
 const DEFAULT_LENGTH = 20;
+const STRENGTH_TEXT = { weak: '弱い', fair: '普通', strong: '強い' } as const;
 
 function toggle(label: string, checked: boolean, onChange: () => void): { node: HTMLElement; on: () => boolean } {
-  const box = el('input', { type: 'checkbox' });
+  const box = el('input', { type: 'checkbox', className: 'switch' });
   box.checked = checked;
-  box.style.width = 'auto';
   box.addEventListener('change', onChange);
-  return { node: el('label', { className: 'row' }, box, el('span', { text: label })), on: () => box.checked };
+  return { node: el('label', { className: 'toggle' }, box, el('span', { text: label })), on: () => box.checked };
 }
 
 export function generatorPanel(onUse: (password: string) => void, onClose: () => void): HTMLElement {
@@ -23,7 +23,7 @@ export function generatorPanel(onUse: (password: string) => void, onClose: () =>
   slider.value = String(DEFAULT_LENGTH);
   const lengthText = el('span', { className: 'muted' });
   const preview = el('p', { className: 'secret' });
-  const strength = el('p', { className: 'muted' });
+  const strength = el('p');
   let current = '';
 
   const lower = toggle('英小文字（a-z）', true, () => regenerate());
@@ -47,7 +47,10 @@ export function generatorPanel(onUse: (password: string) => void, onClose: () =>
       current = generatePassword(o);
       preview.textContent = current;
       preview.className = 'secret';
-      strength.textContent = `強度：約 ${Math.floor(passwordEntropyBits(o.length!, passwordAlphabetSize(o)))} ビット`;
+      const bits = passwordEntropyBits(o.length!, passwordAlphabetSize(o));
+      const level = passwordStrength(bits);
+      strength.textContent = `強度：${STRENGTH_TEXT[level]}（約 ${Math.floor(bits)} ビット）`;
+      strength.className = `strength-${level}`;
       use.disabled = false;
     } catch {
       // 文字種がすべて切られている、などで作れない

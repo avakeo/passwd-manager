@@ -41,6 +41,13 @@ export function passwordAlphabetSize(options: PasswordOptions): number {
   return classesFor(options).join('').length;
 }
 
+// 強度の段階（画面の色分けに使う）。60ビット未満は弱い、80ビット未満は普通、それ以上は強い（2026-10-27 追記）
+export function passwordStrength(bits: number): 'weak' | 'fair' | 'strong' {
+  if (bits < 60) return 'weak';
+  if (bits < 80) return 'fair';
+  return 'strong';
+}
+
 export function generatePassword(options: PasswordOptions = {}): string {
   const length = options.length ?? 20;
   if (!Number.isSafeInteger(length) || length < 1 || length > 65_532) throw new RangeError('invalid password length');
