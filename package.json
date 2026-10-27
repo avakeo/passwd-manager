@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --experimental-strip-types --no-warnings --test --test-reporter=spec \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
+    "test:browser": "playwright test",
     "build:extension": "node --experimental-strip-types --no-warnings scripts/build-extension.ts",
     "vectors:fetch": "node --experimental-strip-types --no-warnings scripts/fetch-vectors.ts"
   },
@@ -17,6 +18,7 @@
     "hono": "4.13.13"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "typescript": "6.0.3",
     "wrangler": "4.147.0"
   }

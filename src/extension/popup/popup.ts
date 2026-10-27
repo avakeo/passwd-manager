@@ -48,6 +48,20 @@ async function render(notice?: string): Promise<void> {
     root.append(button);
     return;
   }
+  if (s.locked && s.quickUnlockAvailable) {
+    // クイックロック解除（4桁）。5回間違えると消え、マスターパスワードに戻る
+    const form = el('form');
+    const code = el('input', { type: 'password', placeholder: '4桁のパスコード', autocomplete: 'off' });
+    form.append(code, el('button', { text: 'パスコードで解除' }));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const value = code.value;
+      code.value = '';
+      const r = await send({ type: 'quickUnlock', passcode: value });
+      await render(r.ok ? undefined : errorText(r.error));
+    });
+    root.append(form);
+  }
   if (s.locked) {
     const form = el('form');
     const password = el('input', { type: 'password', placeholder: 'マスターパスワード', autocomplete: 'current-password' });
@@ -62,6 +76,7 @@ async function render(notice?: string): Promise<void> {
     root.append(form);
   } else {
     root.append(message(vaultText(String(s.vault))));
+    if (s.vault === 'ready') await renderList();
     const lock = el('button', { text: 'ロック' });
     lock.addEventListener('click', async () => {
       await send({ type: 'lock' });
@@ -87,6 +102,28 @@ function vaultText(state: string): string {
     default:
       return '自分宛てのグラントを開けませんでした。管理者に知らせてください。';
   }
+}
+
+// 一覧（タイトルとユーザー名だけ。パスワードはポップアップに渡さない）。同期と一覧は放置のロックを延ばさない
+async function renderList(): Promise<void> {
+  const synced = await send({ type: 'sync' });
+  if (!synced.ok && synced.error === 'ROLLBACK_DETECTED') root.append(message('サーバーが古い状態を返しました。同期を止めています。', 'error'));
+  const r = await send({ type: 'listItems' });
+  if (!r.ok) return;
+  const search = el('input', { type: 'search', placeholder: '検索' });
+  const list = el('ul');
+  const items = r.items as { title: string; username?: string; unreadable: boolean }[];
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list.replaceChildren(
+      ...items
+        .filter((i) => !i.unreadable && (q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q)))
+        .map((i) => el('li', {}, el('span', { text: i.title }), el('span', { text: i.username ? `  ${i.username}` : '', className: 'muted' }))),
+    );
+  };
+  search.addEventListener('input', draw);
+  draw();
+  root.append(search, list);
 }
 
 function renderTotp(): void {

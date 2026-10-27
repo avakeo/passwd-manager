@@ -2,6 +2,7 @@
 // アイテムの一覧・編集は 2b。鍵は持たない。表示はすべて文字として出す（shared/ui.ts）。
 
 import { el, errorText, recoveryNotice, send } from '../shared/ui.ts';
+import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 
 const root = document.getElementById('root')!;
 
@@ -154,6 +155,22 @@ async function render(): Promise<void> {
   root.append(el('p', { text: `役割：${member.role === 'admin' ? '管理者' : 'メンバー'}　状態：${String(s.vault)}`, className: 'muted' }));
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
+  if (s.locked) root.append(el('p', { text: 'ロックされています。ポップアップからロック解除してください。', className: 'warn' }));
+  if (s.vault === 'ready') {
+    // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
+    const slot = el('div');
+    const showList = async () => slot.replaceChildren(await itemsSection(open));
+    const open = async (id: string | null, type: 'login' | 'note') => {
+      if (id === null) return slot.replaceChildren(editorSection(blankItem(type), null, null, () => void showList()));
+      const got = await openItem(id);
+      if (typeof got === 'string') return slot.replaceChildren(el('p', { text: got, className: 'error' }));
+      slot.replaceChildren(editorSection(got.item, id, got.revision, () => void showList()));
+    };
+    await showList();
+    root.append(slot);
+    if (s.unlockedBy === 'password') root.append(passcodeSection(() => void render()));
+  }
+  if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   root.append(stepUpSection(), await sessionsSection(), totpSection(true));
   if (s.hasKey === true) root.append(keySection(true));
   const lock = el('button', { text: 'ロック', className: 'secondary' });

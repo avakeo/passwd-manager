@@ -178,7 +178,7 @@ test('C-13（API 経由） 管理者が保存した暗号文と署名付きの�
   for (const secret of ['Tr7#qLm2!vX9pK', 'team@example.com', '社内Wiki']) assert.ok(!dump.includes(secret));
 
   const cVaultKey = await cOpensFromApi(t, cSession.token, cTrust);
-  const list = (await (await t.request('GET', '/v1/items?since=0', cSession.token)).json()) as {
+  const list = (await (await t.request('GET', '/v1/items?after=0', cSession.token)).json()) as {
     items: { id: string; vault_key_version: number; ciphertext: string }[];
   };
   const got = list.items[0]!;

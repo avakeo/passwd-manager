@@ -8,3 +8,5 @@ node_modules/
 wrangler.toml
 dist/
 extension.config.local.json
+test-results/
+playwright-report/

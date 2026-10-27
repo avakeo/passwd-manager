@@ -17,6 +17,8 @@ export const PASSWORD_NORMALIZATION = 'NFC';
 export const WRAP_KEY_INFO = utf8('teampw/v1/private-key-wrap');
 // 管理者の署名用秘密鍵を包む鍵の用途ラベル。ECDH の秘密鍵用のラップ鍵とは別の鍵にする。
 export const SIGN_KEY_WRAP_INFO = utf8('teampw/v1/sign-key-wrap');
+// クイックロック解除で、パスコードから Vault 鍵を包む鍵を作るときの用途ラベル
+export const QUICK_UNLOCK_WRAP_INFO = utf8('teampw/v1/quick-unlock-wrap');
 
 export type KdfParams = {
   algorithm: typeof KDF_PBKDF2_SHA256;
