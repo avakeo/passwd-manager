@@ -23,7 +23,7 @@
   │ ④ HPKE Base（ECDH ＋ HKDF ＋ AES-256-GCM。info：teampw/v1/vault-key-grant|世代|鍵ID）
   │   開く前に、管理者の署名（ECDSA P-256）を、照合して固定した管理者の署名用公開鍵で確かめる
 Vault 鍵（チーム共通。メンバーごとに「グラント」として D1 に保存）
-  │ ⑤ AES-256-GCM（AAD：v1|item|アイテムID|世代。512B〜64KB にパディング）
+  │ ⑤ AES-256-GCM（AAD：v2|item|アイテムID|世代|リビジョン。512B〜64KB にパディング）
 アイテム（D1 には暗号文で保存）
 ```
 
