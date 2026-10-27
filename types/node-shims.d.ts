@@ -66,6 +66,16 @@ declare module 'node:fs' {
   export function readdirSync(path: string | URL, options?: { recursive: true }): string[];
   export function copyFileSync(src: string | URL, dest: string | URL): void;
   export function rmSync(path: string | URL, options?: { recursive?: boolean; force?: boolean }): void;
+  export function mkdtempSync(prefix: string): string;
+}
+
+// ブラウザのテスト（tests/browser）で、使い捨てのプロファイルの置き場所を作る
+declare module 'node:os' {
+  export function tmpdir(): string;
+}
+
+declare module 'node:path' {
+  export function join(...parts: string[]): string;
 }
 
 // 拡張機能のビルド（scripts/build-extension.ts）で tsc を呼ぶ
@@ -113,6 +123,7 @@ declare module 'node:http' {
   interface Server {
     listen(port: number, host: string, callback?: () => void): Server;
     close(): void;
+    address(): { port: number } | string | null;
   }
   export function createServer(handler: (req: IncomingMessage, res: ServerResponse) => void): Server;
 }

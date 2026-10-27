@@ -165,7 +165,7 @@ test('C-13（API 経由） 管理者が保存した暗号文と署名付きの�
   vaultKeyRaw.fill(0);
   const itemId = newId('item');
   const item = { type: 'login' as const, title: '社内Wiki', username: 'team@example.com', password: 'Tr7#qLm2!vX9pK' };
-  const ciphertext = await encryptItem(vaultKey, { itemId, vaultKeyVersion: 1 }, item);
+  const ciphertext = await encryptItem(vaultKey, { itemId, vaultKeyVersion: 1, revision: 1 }, item);
   const created = await t.request('POST', '/v1/items', adminSession.token, {
     id: itemId,
     vault_key_version: 1,
@@ -178,12 +178,12 @@ test('C-13（API 経由） 管理者が保存した暗号文と署名付きの�
   for (const secret of ['Tr7#qLm2!vX9pK', 'team@example.com', '社内Wiki']) assert.ok(!dump.includes(secret));
 
   const cVaultKey = await cOpensFromApi(t, cSession.token, cTrust);
-  const list = (await (await t.request('GET', '/v1/items?since=0', cSession.token)).json()) as {
-    items: { id: string; vault_key_version: number; ciphertext: string }[];
+  const list = (await (await t.request('GET', '/v1/items?after=0', cSession.token)).json()) as {
+    items: { id: string; revision: number; vault_key_version: number; ciphertext: string }[];
   };
   const got = list.items[0]!;
   assert.deepEqual(
-    await decryptItem(cVaultKey, { itemId: got.id, vaultKeyVersion: got.vault_key_version }, fromBase64Url(got.ciphertext)),
+    await decryptItem(cVaultKey, { itemId: got.id, vaultKeyVersion: got.vault_key_version, revision: got.revision }, fromBase64Url(got.ciphertext)),
     item,
   );
   assert.equal(await cTrust.generations.get(), 1);

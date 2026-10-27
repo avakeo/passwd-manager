@@ -164,5 +164,6 @@ test('P-01 公開鍵が固定値と同じでも、鍵ID が固定した値と違
 test('P-01 grant.ts が export する関数は、照合してから包む createGrant と、署名を確かめて開く関数と、中身を組み立てる関数だけ', async () => {
   const grant = await import('../../src/crypto/grant.ts');
   const functions = Object.entries(grant).filter(([, v]) => typeof v === 'function').map(([k]) => k).sort();
-  assert.deepEqual(functions, ['createGrant', 'grantInfo', 'grantSignedMessage', 'openGrant', 'openGrantForAdmin']);
+  // openGrantForQuickUnlock も、署名を確かめてから開く（仕様書「鍵のライフサイクル」の Vault 鍵（クイックロック解除）。フェーズ2b）
+  assert.deepEqual(functions, ['createGrant', 'grantInfo', 'grantSignedMessage', 'openGrant', 'openGrantForAdmin', 'openGrantForQuickUnlock']);
 });

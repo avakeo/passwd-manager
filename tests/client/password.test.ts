@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generatePassword, passwordEntropyBits } from '../../src/client/password.ts';
+import { generatePassword, passwordAlphabetSize, passwordEntropyBits, passwordStrength } from '../../src/client/password.ts';
 
 test('C-11 既定の20文字と指定長・文字種・紛らわしい文字の除外', () => {
   assert.equal(generatePassword().length, 20);
@@ -55,3 +55,23 @@ test('C-11 作り直し後も有効な文字列の並びに偏りがない', () 
 });
 
 
+
+test('C-11 強度の表示に使う、使える文字の数（生成と同じ文字の集合から数える）', () => {
+  assert.equal(passwordAlphabetSize({}), 26 + 26 + 10 + 22);
+  assert.equal(passwordAlphabetSize({ excludeAmbiguous: true }), 26 + 26 + 10 + 22 - 5);
+  assert.equal(passwordAlphabetSize({ lower: false, upper: false, symbols: false }), 10);
+  assert.equal(passwordAlphabetSize({ lower: false, upper: false, digits: false, symbols: false }), 0);
+  for (const options of [{}, { excludeAmbiguous: true }, { symbols: false, length: 12 }]) {
+    const p = generatePassword(options);
+    assert.ok(new Set(p).size <= passwordAlphabetSize(options));
+  }
+});
+
+test('C-11 強度の段階：60ビット未満は弱い、80ビット未満は普通、それ以上は強い', () => {
+  assert.equal(passwordStrength(passwordEntropyBits(8, 26)), 'weak'); // 約37ビット
+  assert.equal(passwordStrength(59.9), 'weak');
+  assert.equal(passwordStrength(60), 'fair');
+  assert.equal(passwordStrength(passwordEntropyBits(12, 84)), 'fair'); // 約76ビット
+  assert.equal(passwordStrength(80), 'strong');
+  assert.equal(passwordStrength(passwordEntropyBits(20, 84)), 'strong'); // 既定。約127ビット
+});

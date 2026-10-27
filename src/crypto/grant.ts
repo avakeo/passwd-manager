@@ -238,3 +238,9 @@ export async function openGrant(own: OwnKey, trust: GrantTrust, grant: Grant, cu
 export function openGrantForAdmin(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<Bytes> {
   return openGrantRaw(own, trust, grant, currentVaultKeyVersion);
 }
+
+// クイックロック解除の設定だけ：マスターパスワードで解除した直後に、グラントを取り出し可として開き直し、生の Vault 鍵を返す
+// （仕様書「鍵のライフサイクル」の Vault 鍵（クイックロック解除））。呼び出し側は、パスコード由来の鍵で包んだらすぐに wipe する。
+export function openGrantForQuickUnlock(own: OwnKey, trust: GrantTrust, grant: Grant, currentVaultKeyVersion: number): Promise<Bytes> {
+  return openGrantRaw(own, trust, grant, currentVaultKeyVersion);
+}

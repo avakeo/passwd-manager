@@ -97,7 +97,7 @@ test('初めてのログインで、承認待ちのメンバーができ、TOTP 
   // 承認待ち：/v1/me は使えるが、Vault とアイテムは 403（Z-01）
   assert.notEqual((await t.request('GET', '/v1/me', body.access_token)).status, 403);
   assert.equal((await t.request('GET', '/v1/vault', body.access_token)).status, 403);
-  assert.equal((await t.request('GET', '/v1/items?since=0', body.access_token)).status, 403);
+  assert.equal((await t.request('GET', '/v1/items?after=0', body.access_token)).status, 403);
   // D1 に生のトークンは置かない
   assert.ok(!dump(t).includes(body.access_token!) && !dump(t).includes(body.refresh_token!));
 });
@@ -112,7 +112,7 @@ test('承認済みのメンバーのログインでは、TOTP を確かめてか
   const { body } = await totpLogin(t, userId, referenceTotp(secret, stepAt(T0 + 30_000)));
   mock.timers.setTime(T0);
   assert.equal(body.member!.status, 'active');
-  assert.equal((await t.request('GET', '/v1/items?since=0', body.access_token)).status, 200);
+  assert.equal((await t.request('GET', '/v1/items?after=0', body.access_token)).status, 200);
 });
 
 test('A-02 PKCE の検証値が違うと、Discord が拒否し、ログインも 400 で拒否される（検証値は Discord に渡している）', async () => {
@@ -398,7 +398,7 @@ test('TOTP を登録した人のログインは、一時トークンだけを返
   const res = await t.request('POST', '/v1/auth/totp', undefined, { challenge_token: body.challenge_token, code: referenceTotp(m.secret, stepAt(T0)) });
   assert.equal(res.status, 200);
   const s = (await res.json()) as LoginBody;
-  assert.equal((await t.request('GET', '/v1/items?since=0', s.access_token)).status, 200);
+  assert.equal((await t.request('GET', '/v1/items?after=0', s.access_token)).status, 200);
   // 確かめた時刻がセッションに入る（管理操作の再確認に使う）
   assert.equal(await verifiedAt(t, s.access_token!), T0);
   // 使った一時トークンはもう使えない
@@ -673,7 +673,7 @@ for (const role of ['admin', 'member'] as const) {
     for (const [method, path] of [
       ['GET', '/v1/me'],
       ['GET', '/v1/vault'],
-      ['GET', '/v1/items?since=0'],
+      ['GET', '/v1/items?after=0'],
       ['GET', '/v1/me/sessions'],
     ] as const) {
       assert.equal((await t.request(method, path, token)).status, 403, `${method} ${path}`);
@@ -682,7 +682,7 @@ for (const role of ['admin', 'member'] as const) {
     // 登録はできる
     await registerTotp(t, token);
     // 登録した後は使える。登録したセッションは TOTP を確かめた扱い
-    assert.equal((await t.request('GET', '/v1/items?since=0', token)).status, 200);
+    assert.equal((await t.request('GET', '/v1/items?after=0', token)).status, 200);
     assert.equal(await verifiedAt(t, token), T0);
   });
 }

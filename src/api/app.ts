@@ -14,7 +14,7 @@ import { readJson } from './json.ts';
 import { HttpProblem, problem } from './problem.ts';
 import type { Principal } from './auth.ts';
 import { fromBase64Url } from '../crypto/bytes.ts';
-import { ALG_AES_256_GCM, FORMAT_V1 } from '../crypto/format.ts';
+import { ALG_AES_256_GCM, FORMAT_V2 } from '../crypto/format.ts';
 
 
 export const WEB_ORIGIN = 'https://pw.example.com'; // 仮の表記。CORS で許可するのはこの1つだけ
@@ -34,8 +34,8 @@ function checkItemCiphertext(ciphertext: unknown): string {
   if (Math.floor((ciphertext.length * 3) / 4) > MAX_ITEM_ENVELOPE) throw new HttpProblem(413);
   const bytes = fromBase64Url(ciphertext);
   if (!ITEM_ENVELOPE_LENGTHS.includes(bytes.length)) throw new HttpProblem(400);
-  // 先頭2バイトが 0x01 0x01（形式 v1、AES-256-GCM）
-  if (bytes[0] !== FORMAT_V1 || bytes[1] !== ALG_AES_256_GCM) throw new HttpProblem(400);
+  // 先頭2バイトが 0x02 0x01（アイテムの形式 v2、AES-256-GCM）
+  if (bytes[0] !== FORMAT_V2 || bytes[1] !== ALG_AES_256_GCM) throw new HttpProblem(400);
   return ciphertext;
 }
 
@@ -152,17 +152,18 @@ export function createApp() {
     });
   });
 
-  // 差分同期。削除も「deleted: true」として返す（S-02）
+  // 差分同期。after の change_seq（書いたときの Vault リビジョン）より後に書かれたものを、順に返す。
+  // 削除も「deleted: true」として返す（S-02）。更新日時で取ると、同じミリ秒に書かれたものを取りこぼしうる
   app.get('/v1/items', async (c) => {
-    const sinceRaw = c.req.query('since') ?? '0';
-    if (!/^\d{1,16}$/.test(sinceRaw)) throw new HttpProblem(400);
+    const afterRaw = c.req.query('after') ?? '0';
+    if (!/^\d{1,16}$/.test(afterRaw)) throw new HttpProblem(400);
     const rows = await c.env.DB.prepare(
-      `SELECT id, revision, vault_key_version, ciphertext, updated_at, deleted_at,
+      `SELECT id, revision, vault_key_version, ciphertext, updated_at, deleted_at, change_seq,
               (SELECT vault_revision FROM vault_meta WHERE id = 1) AS vault_revision
-         FROM items WHERE updated_at > ? ORDER BY updated_at, id`,
+         FROM items WHERE change_seq > ? ORDER BY change_seq, id`,
     )
-      .bind(Number(sinceRaw))
-      .all<{ id: string; revision: number; vault_key_version: number; ciphertext: string | null; updated_at: number; deleted_at: number | null; vault_revision: number }>();
+      .bind(Number(afterRaw))
+      .all<{ id: string; revision: number; vault_key_version: number; ciphertext: string | null; updated_at: number; deleted_at: number | null; change_seq: number; vault_revision: number }>();
     const vaultRevision =
       rows.results[0]?.vault_revision ??
       (await c.env.DB.prepare('SELECT vault_revision FROM vault_meta WHERE id = 1').first<{ vault_revision: number }>())?.vault_revision ??
@@ -175,20 +176,23 @@ export function createApp() {
         vault_key_version: r.vault_key_version,
         ciphertext: r.ciphertext,
         updated_at: r.updated_at,
+        change_seq: r.change_seq,
         deleted: r.deleted_at !== null,
       })),
     });
   });
 
-  // 3つの文を1つのバッチ（トランザクション）にする。
+  // 4つの文を1つのバッチ（トランザクション）にする。
   //   1. アイテムの書き込み（条件付き）
   //   2. 1 が1行を変えたときだけ Vault リビジョンを1増やす（changes() は直前の文が変えた行数）
-  //   3. 2 が1行を変えたときだけ監査ログに書く
+  //   3. 2 が1行を変えたときだけ、アイテムの change_seq を新しい Vault リビジョンにする（差分同期のカーソル）
+  //   4. 3 が1行を変えたときだけ監査ログに書く
   async function writeItem(db: D1Database, itemSql: string, itemParams: unknown[], p: Principal, action: string, itemId: string) {
     const now = Date.now();
     const results = await db.batch([
       db.prepare(itemSql).bind(...itemParams),
       db.prepare('UPDATE vault_meta SET vault_revision = vault_revision + 1 WHERE id = 1 AND changes() = 1'),
+      db.prepare('UPDATE items SET change_seq = (SELECT vault_revision FROM vault_meta WHERE id = 1) WHERE id = ? AND changes() = 1').bind(itemId),
       db
         .prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) SELECT ?, ?, 'item', ?, ? WHERE changes() = 1`)
         .bind(p.memberId, action, itemId, now),

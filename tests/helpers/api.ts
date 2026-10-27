@@ -30,10 +30,11 @@ async function sha256Hex(s: string): Promise<string> {
   return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))));
 }
 
-export function setup() {
-  const db = new SqliteD1();
-  db.db.exec(`INSERT INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1)`);
-  db.db.exec(`INSERT INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
+// beforeMigration で vault_meta などを先に入れた場合は、その行を残す
+export function setup(beforeMigration?: ConstructorParameters<typeof SqliteD1>[0]) {
+  const db = new SqliteD1(beforeMigration);
+  db.db.exec(`INSERT OR IGNORE INTO vault_meta (id, current_vault_key_version, vault_revision, schema_version) VALUES (1, 1, 0, 1)`);
+  db.db.exec(`INSERT OR IGNORE INTO vault_key_versions (version, status, created_by, created_at) VALUES (1, 'current', NULL, 0)`);
   const app = createApp();
   const env = { DB: db, ...TEST_ENV };
   let n = 0; // メンバーの番号（member_1、member_2…）
@@ -110,7 +111,7 @@ export function setup() {
 // 512 段のアイテムと同じ長さ（542バイト）の、形だけ正しい暗号文
 export function fakeCiphertext(fill = 0x55): string {
   const b = new Uint8Array(542).fill(fill);
-  b[0] = 0x01;
+  b[0] = 0x02; // アイテムの形式 v2
   b[1] = 0x01;
   return toBase64Url(b);
 }

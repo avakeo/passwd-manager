@@ -1,6 +1,8 @@
-// ポップアップ：ログイン、ログインの途中の TOTP のコード、ロック解除、ロック、全画面ページを開く。
+// ポップアップ：ログインの画面を開く、ログインの途中の TOTP のコード、ロック解除、ロック、全画面ページを開く。
 // 鍵は持たない。マスターパスワードは Service Worker に1回だけ送り、送ったら入力欄を空にする。
+// ログインは全画面ページで行う。Discord の窓が開くとポップアップは閉じ、結果を見せられないため（2026-10-27）。
 
+import { loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, pageUrl, recoveryNotice, send } from '../shared/ui.ts';
 
 const root = document.getElementById('root')!;
@@ -22,14 +24,14 @@ async function render(notice?: string): Promise<void> {
     root.append(message(errorText(s.error), 'error'));
     return;
   }
-  if (s.loginInProgress && !s.loggedIn) return renderTotp();
+  if (s.loginInProgress && !s.loggedIn) {
+    root.append(loginTotpForm(render));
+    return;
+  }
   if (!s.loggedIn) {
     const button = el('button', { text: 'Discord でログイン' });
-    button.addEventListener('click', async () => {
-      const r = await send({ type: 'login', deviceLabel: 'Chrome' });
-      await render(r.ok ? undefined : errorText(r.error));
-    });
-    root.append(button);
+    button.addEventListener('click', () => openPage('#login'));
+    root.append(message('全画面ページを開いてログインします。'), button);
     return;
   }
   if (s.totpSetupRequired) {
@@ -49,19 +51,10 @@ async function render(notice?: string): Promise<void> {
     return;
   }
   if (s.locked) {
-    const form = el('form');
-    const password = el('input', { type: 'password', placeholder: 'マスターパスワード', autocomplete: 'current-password' });
-    form.append(password, el('button', { text: 'ロック解除' }));
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const value = password.value;
-      password.value = '';
-      const r = await send({ type: 'unlock', masterPassword: value });
-      await render(r.ok ? undefined : errorText(r.error));
-    });
-    root.append(form);
+    root.append(unlockForms(s.quickUnlockAvailable === true, render));
   } else {
     root.append(message(vaultText(String(s.vault))));
+    if (s.vault === 'ready') await renderList();
     const lock = el('button', { text: 'ロック' });
     lock.addEventListener('click', async () => {
       await send({ type: 'lock' });
@@ -89,19 +82,26 @@ function vaultText(state: string): string {
   }
 }
 
-function renderTotp(): void {
-  root.append(message('認証アプリのコード（または回復コード）を入れてください。'));
-  const form = el('form');
-  const code = el('input', { type: 'text', placeholder: '6桁のコード、または回復コード', autocomplete: 'one-time-code' });
-  form.append(code, el('button', { text: '確かめる' }));
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const value = code.value.trim();
-    code.value = '';
-    const r = await send(/^\d{6}$/.test(value) ? { type: 'loginTotp', code: value } : { type: 'loginTotp', recoveryCode: value });
-    await render(r.ok ? undefined : errorText(r.error));
-  });
-  root.append(form);
+// 一覧（タイトルとユーザー名だけ。パスワードはポップアップに渡さない）。同期と一覧は放置のロックを延ばさない
+async function renderList(): Promise<void> {
+  const synced = await send({ type: 'sync' });
+  if (!synced.ok && synced.error === 'ROLLBACK_DETECTED') root.append(message('サーバーが古い状態を返しました。同期を止めています。', 'error'));
+  const r = await send({ type: 'listItems' });
+  if (!r.ok) return;
+  const search = el('input', { type: 'search', placeholder: '検索' });
+  const list = el('ul');
+  const items = r.items as { title: string; username?: string; unreadable: boolean }[];
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list.replaceChildren(
+      ...items
+        .filter((i) => !i.unreadable && (q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q)))
+        .map((i) => el('li', {}, el('span', { text: i.title }), el('span', { text: i.username ? `  ${i.username}` : '', className: 'muted' }))),
+    );
+  };
+  search.addEventListener('input', draw);
+  draw();
+  root.append(search, list);
 }
 
 // ポップアップを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない

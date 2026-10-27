@@ -47,11 +47,13 @@ class SqliteStatement implements D1PreparedStatement {
 export class SqliteD1 implements D1Database {
   readonly db: DatabaseSync;
 
-  constructor() {
+  // beforeMigration：そのファイルを流す直前に呼ぶ。前のマイグレーションまでの DB に行を入れてから、移行を確かめるため
+  constructor(beforeMigration: Record<string, (db: DatabaseSync) => void> = {}) {
     this.db = new DatabaseSync(':memory:');
     // migrations/ のファイルを番号の順にすべて流す（本番の wrangler d1 migrations apply と同じ順）
     const dir = new URL('../../migrations/', import.meta.url);
     for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+      beforeMigration[file]?.(this.db);
       this.db.exec(readFileSync(new URL(file, dir), 'utf8'));
     }
   }
