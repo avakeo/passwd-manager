@@ -2,8 +2,12 @@
 //   storage.local / storage.session：キーと値（値は structuredClone で写す）。session はブラウザを閉じると消える（clear で再現）
 //   runtime：拡張機能の ID と、自分のページの URL
 //   identity：Discord の認可画面の代わりに、偽の Discord から認可コードをもらって戻り先の URL を返す
+//   tabs・scripting：タブの URL と、トップフレームの文書 ID だけを持つ。注入は呼ばれた引数を記録し、関数は本物を動かさない
+//     （確認のスクリプトはタブのオリジンを、入力のスクリプトは入れた欄の数を返したことにする）
+//   offscreen・runtime.sendMessage：オフスクリーンドキュメントへのコピーの依頼を記録する
 
-import type { ChromeLike, StorageArea } from '../../src/extension/background/chrome-like.ts';
+import type { ChromeLike, InjectionResult, InjectionTarget, StorageArea } from '../../src/extension/background/chrome-like.ts';
+import assert from 'node:assert/strict';
 import type { FakeDiscord } from './fake-discord.ts';
 import { EXTENSION_REDIRECT_URI } from './api.ts';
 
@@ -40,9 +44,60 @@ export class FakeStorageArea implements StorageArea {
   }
 }
 
+export type FakeTab = { url: string; documentId: string; frames?: number[] };
+export type Injection = { target: InjectionTarget; func: string; args: unknown[] };
+
 export class FakeChrome implements ChromeLike {
   readonly storage = { local: new FakeStorageArea(), session: new FakeStorageArea() };
-  readonly runtime = { id: EXTENSION_ID, getURL: (path: string) => `chrome-extension://${EXTENSION_ID}/${path.replace(/^\//, '')}` };
+  // オフスクリーンドキュメントに送ったメッセージ。reply が返事
+  readonly sentToOffscreen: unknown[] = [];
+  offscreenReply: unknown = { ok: true };
+  readonly runtime = {
+    id: EXTENSION_ID,
+    getURL: (path: string) => `chrome-extension://${EXTENSION_ID}/${path.replace(/^\//, '')}`,
+    sendMessage: async (message: unknown) => {
+      if (!this.offscreenOpen) throw new Error('Could not establish connection. Receiving end does not exist.');
+      this.sentToOffscreen.push(structuredClone(message));
+      return this.offscreenReply;
+    },
+  };
+  offscreenOpen = false;
+  readonly offscreen = {
+    hasDocument: async () => this.offscreenOpen,
+    createDocument: async (details: { url: string; reasons: string[]; justification: string }) => {
+      if (this.offscreenOpen) throw new Error('Only a single offscreen document may be created.');
+      assert.deepEqual(details.reasons, ['CLIPBOARD']);
+      this.offscreenOpen = true;
+    },
+  };
+  readonly openTabs = new Map<number, FakeTab>();
+  readonly injections: Injection[] = [];
+  // 注入のたびに呼ぶ（照合と入力の間にページを移す、などのテストで使う）
+  onInject: ((injection: Injection) => void) | null = null;
+  readonly tabs = {
+    get: async (tabId: number) => {
+      const tab = this.openTabs.get(tabId);
+      if (!tab) throw new Error(`No tab with id: ${tabId}.`);
+      return { id: tabId, url: tab.url };
+    },
+  };
+  readonly scripting = {
+    executeScript: async <A extends unknown[], R>(injection: { target: InjectionTarget; func: (...args: A) => R; args?: A }): Promise<InjectionResult<Awaited<R>>[]> => {
+      const record: Injection = { target: structuredClone(injection.target), func: injection.func.name, args: structuredClone(injection.args ?? []) as unknown[] };
+      this.injections.push(record);
+      this.onInject?.(record);
+      const tab = this.openTabs.get(injection.target.tabId);
+      if (!tab) throw new Error(`No tab with id: ${injection.target.tabId}.`);
+      if (injection.target.documentIds && !injection.target.documentIds.includes(tab.documentId)) throw new Error('No document with id.');
+      const frames = injection.target.frameIds ?? [0];
+      return frames
+        .filter((f) => (tab.frames ?? [0]).includes(f))
+        .map((frameId) => {
+          const result = record.func === 'probePage' ? { origin: new URL(tab.url).origin } : record.func === 'fillLogin' ? { filled: 2 } : undefined;
+          return { frameId, documentId: frameId === 0 ? tab.documentId : `${tab.documentId}-frame${frameId}`, result: result as Awaited<R> };
+        });
+    },
+  };
   // 次の launchWebAuthFlow で、どの Discord ユーザーとしてログインするか
   loginAs: string | null = null;
   readonly identity;

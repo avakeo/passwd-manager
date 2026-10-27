@@ -8,10 +8,11 @@ import { buildExtension, buildManifest } from '../../scripts/build-extension.ts'
 const CONFIG = { apiOrigin: 'https://pw-api.example.com', discordClientId: '100000000000000001', manifestKey: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtest' };
 const template = JSON.parse(readFileSync(new URL('../../src/extension/manifest.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 
-test('E-16 manifest：権限は storage と identity と API の接続先だけ。content_scripts・externally_connectable・web_accessible_resources を持たない', () => {
+test('E-16 manifest：権限は決めたものと API の接続先だけ。全サイトへの権限、content_scripts・externally_connectable・web_accessible_resources を持たない', () => {
   const m = buildManifest(template, CONFIG) as Record<string, unknown>;
   assert.equal(m.manifest_version, 3);
-  assert.deepEqual(m.permissions, ['storage', 'identity']);
+  // フェーズ3：今のタブへの一時権限、注入、オフスクリーンドキュメント、クリップボードの書き込みと読み直し（2026-10-27 決定、判断待ち2）
+  assert.deepEqual(m.permissions, ['storage', 'identity', 'activeTab', 'scripting', 'offscreen', 'clipboardWrite', 'clipboardRead']);
   assert.deepEqual(m.host_permissions, ['https://pw-api.example.com/*']);
   for (const k of ['content_scripts', 'externally_connectable', 'web_accessible_resources', 'optional_permissions', 'optional_host_permissions']) assert.equal(k in m, false, k);
   assert.equal(m.key, CONFIG.manifestKey);

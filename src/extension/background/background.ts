@@ -5,6 +5,7 @@
 //   - 放置のロックは15分。Service Worker が起きたとき（onStartup）と、メッセージを受け取るたびに、処理の前に確かめる
 //   - メッセージは messages.ts の検査を通ったものだけを処理する（E-08）
 //   - アイテム（2b）：保存の前と復号の後に validateItem を通す。storage.local には暗号文だけをキャッシュし、平文の一覧はメモリだけ（item-sync.ts）
+//   - 自動入力とコピー（3）：ポップアップからの操作でだけ注入する。入力の直前にタブと文書を取り直す。コピーはオフスクリーンドキュメントで1分後に消す（autofill.ts）
 //   - クイックロック解除（2b）：Vault 鍵だけを、パスコード由来の鍵で包んで storage.session に置く。戻った状態は秘密鍵を持たない（passcode.ts）
 // このファイルは、メッセージの入口と、種類ごとの処理の表をまとめる。処理の中身は account.ts、vault.ts、passcode.ts、item-sync.ts にある
 
@@ -15,6 +16,7 @@ import { createAccount } from './account.ts';
 import { createItemSync } from './item-sync.ts';
 import { createPasscode } from './passcode.ts';
 import { createVault } from './vault.ts';
+import { createAutofill } from './autofill.ts';
 import { Fail, LAST_ACTIVITY_KEY, createContext, type BackgroundDeps, type Handler, type Reply } from './context.ts';
 import { CryptoError } from '../../crypto/errors.ts';
 
@@ -37,12 +39,14 @@ export function createBackground(deps: BackgroundDeps): Background {
   const passcode = createPasscode(ctx); // クイックロック解除
   const items = createItemSync(ctx, vault.openVault); // アイテムと同期
   const account = createAccount(ctx, passcode); // 状態、ログイン、TOTP、ロック、セッション
+  const autofill = createAutofill(ctx, items.readItem); // 自動入力とコピー（フェーズ3）
 
   const handlers: Record<Message['type'], Handler> = {
     ...account.handlers,
     ...vault.handlers,
     ...passcode.handlers,
     ...items.handlers,
+    ...autofill.handlers,
   };
 
   return {
@@ -62,7 +66,7 @@ export function createBackground(deps: BackgroundDeps): Background {
       await checkIdle();
       if (!PASSIVE_TYPES.has(message.type)) await chrome.storage.session.set({ [LAST_ACTIVITY_KEY]: Date.now() });
       try {
-        return await handlers[message.type](message);
+        return await handlers[message.type](message, sender);
       } catch (e) {
         if (e instanceof Fail || e instanceof ApiError) return { ok: false, error: e.code };
         if (e instanceof CryptoError) return { ok: false, error: 'CRYPTO' };

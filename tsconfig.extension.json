@@ -16,5 +16,5 @@
     "noEmitOnError": true,
     "skipLibCheck": true
   },
-  "files": ["src/extension/background/service-worker.ts", "src/extension/popup/popup.ts", "src/extension/page/app.ts"]
+  "files": ["src/extension/background/service-worker.ts", "src/extension/popup/popup.ts", "src/extension/page/app.ts", "src/extension/offscreen/offscreen.ts"]
 }
