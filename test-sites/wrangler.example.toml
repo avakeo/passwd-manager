@@ -1,0 +1,25 @@
+# test-sites の設定例
+# このファイルを test-sites/wrangler.toml にコピーして、手元の値に変える。
+# wrangler.toml は .gitignore に入っているのでコミットしない。
+#
+# 同じ worker.ts を、site-a と site-b の2つの Worker としてデプロイする。
+# 1回目は site-a、2回目は site-b の設定にして `npx wrangler deploy --config test-sites/wrangler.toml` を実行する。
+# 2つのオリジンが分かれればよいので、workers.dev の URL のままでよい。
+
+name = "site-a"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+# もう一方のサイトのオリジン。末尾のスラッシュは付けない。
+# 例：site-a をデプロイするときは site-b のオリジン、site-b をデプロイするときは site-a のオリジン。
+OTHER_ORIGIN = "https://site-b.example.workers.dev"
+
+# --- site-b としてデプロイする場合は、上の name と OTHER_ORIGIN を次のように変える ---
+# name = "site-b"
+# OTHER_ORIGIN = "https://site-a.example.workers.dev"
+#
+# 最初のデプロイでは相手の URL がまだ分からないので、次の順で行う。
+# 1. site-a を OTHER_ORIGIN = "" でデプロイし、表示された URL を控える
+# 2. site-b を OTHER_ORIGIN = "<site-a の URL>" でデプロイし、表示された URL を控える
+# 3. site-a を OTHER_ORIGIN = "<site-b の URL>" でもう一度デプロイする
