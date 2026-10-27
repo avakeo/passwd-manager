@@ -108,7 +108,7 @@
 - `/simple`：ユーザー名とパスワードの両方が入る（E-01）。
 - `/two-step`：「次へ」を押す前はユーザー名だけ、「次へ」を押した後にパスワードの欄が出る。入力の様子を記録する。
 - `/spa`：1秒待ってフォームが出てから、入力の様子を記録する。
-- `/hidden`：見えているユーザー名とパスワードだけが入り、`password_display_none`、`password_visibility_hidden`、`password_zero_size`、`password_offscreen` には入らない（E-06）。
+- `/hidden`：見えているユーザー名とパスワードだけが入り、`password_display_none`、`password_visibility_hidden`、`password_zero_size`、`password_offscreen` には入らない（E-06）。送信すると、2行目に「見えない欄：4つとも空」か、入力された欄の名前が出る。
 - `/iframe`：site-a のページから自動入力を実行しても、iframe の中の site-b の `/simple` には入らない（E-02）。site-b にも別のアイテムを登録しておくと、オリジン不一致の確認になる。
 - `/navigate`：「3秒後に移動する」を押し、3秒の間にポップアップから自動入力を始める。site-b の `/simple` に移った後に、site-a のアイテムが入らないことを確かめる（E-13）。site-b 側にもアイテムを登録しておくと、移った先で別のアイテムを選んだ場合との区別がしやすい。
 

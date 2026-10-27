@@ -104,6 +104,11 @@ test('E-06 /hidden：見えない欄には入力されないよう、4種類の�
   assert.match(text, /\.field-zero-size\s*\{[^}]*width:\s*0/);
   assert.match(text, /\.field-offscreen\s*\{[^}]*left:\s*-10000px/);
   assert.ok(text.includes('input[name="password"]'), '結果には見える欄だけを使う');
+  // 見えない欄に入ったかどうかも、送信のときに画面へ出す（名前だけ。値は出さない）
+  assert.ok(text.includes('id="hidden-result"'), '見えない欄の結果を出す場所がある');
+  assert.ok(text.includes('見えない欄：4つとも空'));
+  assert.ok(text.includes('見えない欄に入力された：'));
+  assert.ok(!/hidden[^\n]*\.value\s*\+/.test(text), '見えない欄の値そのものは出さない');
 });
 
 test('E-02 /iframe：もう一方のサイトの /simple を埋め込む。未設定ならその旨を出す', async () => {

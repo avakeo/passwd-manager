@@ -128,6 +128,21 @@ const TWO_STEP_SCRIPT = `(function () {
 })();
 ${FORM_SCRIPT}`;
 
+// 見えない欄に値が入ったかを、送信のときに名前だけで出す（E-06）。値そのものは出さない
+const HIDDEN_SCRIPT = `${FORM_SCRIPT}
+(function () {
+  const form = document.getElementById('login-form');
+  const out = document.getElementById('hidden-result');
+  if (!form || !out) return;
+  form.addEventListener('submit', function () {
+    const filled = [];
+    for (const input of form.querySelectorAll('.hidden-fields input')) {
+      if (input.value !== '') filled.push(input.name);
+    }
+    out.textContent = filled.length === 0 ? '見えない欄：4つとも空' : '見えない欄に入力された：' + filled.join('、');
+  });
+})();`;
+
 const SPA_SCRIPT = `(function () {
   const app = document.getElementById('app');
   if (!app) return;
@@ -345,7 +360,7 @@ function hiddenPage(): Response {
     heading: '見えない入力欄',
     testLine: 'E-06 見えない入力欄。期待：見えない欄には入力されない',
     frameAncestors: "'none'",
-    script: FORM_SCRIPT,
+    script: HIDDEN_SCRIPT,
     body: `<form id="login-form" method="post" action="">
 <div class="field">
 <label for="username">ユーザー名</label>
@@ -363,7 +378,8 @@ function hiddenPage(): Response {
 <input class="field-offscreen" id="password_offscreen" name="password_offscreen" type="password" autocomplete="current-password" tabindex="-1">
 </div>
 </form>
-<p id="result" class="result" role="status"></p>`,
+<p id="result" class="result" role="status"></p>
+<p id="hidden-result" class="result" role="status"></p>`,
   });
 }
 
