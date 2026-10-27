@@ -6,6 +6,7 @@ import {
   ALG_AES_256_GCM,
   ALG_HPKE_BASE,
   FORMAT_V1,
+  FORMAT_V2,
   assertId,
   encodeAeadEnvelope,
   encodeGrantEnvelope,
@@ -46,19 +47,22 @@ test('ID に区切り文字などが入ると拒否する', () => {
   assertId('key_7f3a');
 });
 
-test('AAD は v1|item|ID|世代 と v1|member-key|鍵ID|公開鍵の SHA-256', () => {
-  assert.deepEqual(itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1 }), utf8('v1|item|item_3c9a|1'));
+test('AAD は v2|item|ID|世代|リビジョン と v1|member-key|鍵ID|公開鍵の SHA-256', () => {
+  assert.deepEqual(itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1, revision: 3 }), utf8('v2|item|item_3c9a|1|3'));
   const publicKeySha256 = fromHex('70dd2685e8369120b12da8c33d6fbde7a0d9215389fe4f47efd151147a4b8110');
   assert.deepEqual(memberKeyAad({ keyId: 'key_7f3a', publicKeySha256 }), utf8('v1|member-key|key_7f3a|70dd2685e8369120b12da8c33d6fbde7a0d9215389fe4f47efd151147a4b8110'));
   assert.throws(() => memberKeyAad({ keyId: 'key_7f3a', publicKeySha256: publicKeySha256.subarray(1) }), isCode('INVALID_INPUT'));
-  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 0 }), isCode('INVALID_INPUT'));
-  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1.5 }), isCode('INVALID_INPUT'));
+  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 0, revision: 1 }), isCode('INVALID_INPUT'));
+  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1.5, revision: 1 }), isCode('INVALID_INPUT'));
+  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1, revision: 0 }), isCode('INVALID_INPUT'));
+  assert.throws(() => itemAad({ itemId: 'item_3c9a', vaultKeyVersion: 1, revision: 1.5 }), isCode('INVALID_INPUT'));
 });
 
 test('保存形式は 形式・アルゴリズムID・ノンス・暗号文 の順で往復する', () => {
   const env = encodeAeadEnvelope('item', nonce, body);
-  assert.equal(env[0], FORMAT_V1);
+  assert.equal(env[0], FORMAT_V2); // アイテムだけ v2（リビジョンを AAD に入れた形）
   assert.equal(env[1], ALG_AES_256_GCM);
+  assert.equal(encodeAeadEnvelope('member-key', nonce, body)[0], FORMAT_V1);
   assert.equal(env.length, 2 + 12 + 32);
   const parsed = parseAeadEnvelope('item', env);
   assert.deepEqual(parsed.nonce, nonce);
@@ -74,9 +78,14 @@ test('グラントの保存形式はノンスを持たない', () => {
 });
 
 test('C-10 未知の形式バージョンは拒否される', () => {
-  const env = encodeAeadEnvelope('item', nonce, body);
-  env[0] = 0x02;
-  assert.throws(() => parseAeadEnvelope('item', env), isCode('UNSUPPORTED_FORMAT'));
+  for (const f of [0x00, FORMAT_V1, 0x03]) {
+    const env = encodeAeadEnvelope('item', nonce, body);
+    env[0] = f;
+    assert.throws(() => parseAeadEnvelope('item', env), isCode('UNSUPPORTED_FORMAT'), `item ${f}`);
+  }
+  const key = encodeAeadEnvelope('member-key', nonce, body);
+  key[0] = FORMAT_V2;
+  assert.throws(() => parseAeadEnvelope('member-key', key), isCode('UNSUPPORTED_FORMAT'));
   const grant = encodeGrantEnvelope(body);
   grant[0] = 0x00;
   assert.throws(() => parseGrantEnvelope(grant), isCode('UNSUPPORTED_FORMAT'));
@@ -98,6 +107,6 @@ test('C-10 使う所が違うアルゴリズムID（アイテムに HPKE の 0x0
 });
 
 test('C-10 短すぎる保存形式は拒否される', () => {
-  assert.throws(() => parseAeadEnvelope('item', new Uint8Array([FORMAT_V1, ALG_AES_256_GCM, 1, 2])), isCode('MALFORMED'));
+  assert.throws(() => parseAeadEnvelope('item', new Uint8Array([FORMAT_V2, ALG_AES_256_GCM, 1, 2])), isCode('MALFORMED'));
   assert.throws(() => parseGrantEnvelope(new Uint8Array([FORMAT_V1])), isCode('MALFORMED'));
 });

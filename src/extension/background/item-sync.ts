@@ -35,7 +35,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
 
   async function openEntry(id: string, e: CacheEntry): Promise<ClientItem> {
     if (state.vaultKey === null || e.vaultKeyVersion !== state.vaultVersion) throw new Fail('UNREADABLE');
-    const content = await decryptItem(state.vaultKey, { itemId: id, vaultKeyVersion: e.vaultKeyVersion }, fromBase64Url(e.ciphertext));
+    // AAD はサーバーの行のリビジョンで作り直す。控えた古い暗号文を書き戻されたら、ここで開けずに「読めないアイテム」になる（S-11）
+    const content = await decryptItem(state.vaultKey, { itemId: id, vaultKeyVersion: e.vaultKeyVersion, revision: e.revision }, fromBase64Url(e.ciphertext));
     return validateItem(content); // 復号した後も、形を確かめる（I-02）
   }
 
@@ -154,8 +155,9 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     return { ok: false, error: 'CONFLICT', current, currentRevision: e.revision };
   }
 
-  async function encryptFor(id: string, item: ClientItem): Promise<string> {
-    return toBase64Url(await encryptItem(state.vaultKey!, { itemId: id, vaultKeyVersion: state.vaultVersion! }, item as unknown as ItemContent));
+  // revision は書き込んだ後のリビジョン（作成は1、更新は元にしたリビジョン + 1）
+  async function encryptFor(id: string, revision: number, item: ClientItem): Promise<string> {
+    return toBase64Url(await encryptItem(state.vaultKey!, { itemId: id, vaultKeyVersion: state.vaultVersion!, revision }, item as unknown as ItemContent));
   }
 
   const handlers = {
@@ -193,7 +195,7 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
         const epoch = state.lockEpoch;
         for (let attempt = 0; attempt < 2; attempt++) {
           const id = newId('item');
-          const ciphertext = await encryptFor(id, item);
+          const ciphertext = await encryptFor(id, 1, item);
           const res = await api.call('POST', '/v1/items', { id, vault_key_version: state.vaultVersion, ciphertext });
           if (res.status === 201) {
             if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
@@ -212,7 +214,7 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
       }
       const id = m.id;
       const epoch = state.lockEpoch;
-      const ciphertext = await encryptFor(id, item);
+      const ciphertext = await encryptFor(id, Number(m.revision) + 1, item);
       const res = await api.call('PUT', `/v1/items/${id}`, { revision: m.revision, vault_key_version: state.vaultVersion, ciphertext });
       if (res.status === 409) {
         // 作成と同じく原因で分ける（10.2）。鍵の世代の違いは、上書きを選んでも 409 が続くので、選択の画面に回さない

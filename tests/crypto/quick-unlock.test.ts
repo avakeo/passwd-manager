@@ -22,8 +22,8 @@ test('A-5 パスコードで包んだ Vault 鍵は、同じパスコードで開
   assert.equal(key.extractable, false);
   // 元の鍵で暗号化したアイテムを、戻った鍵で開ける
   const original = await importVaultKey(raw.slice());
-  const ct = await encryptItem(original, { itemId: 'item_x', vaultKeyVersion: 3 }, { type: 'note', title: 't', body: 'b' });
-  assert.deepEqual(await decryptItem(key, { itemId: 'item_x', vaultKeyVersion: 3 }, ct), { type: 'note', title: 't', body: 'b' });
+  const ct = await encryptItem(original, { itemId: 'item_x', vaultKeyVersion: 3, revision: 1 }, { type: 'note', title: 't', body: 'b' });
+  assert.deepEqual(await decryptItem(key, { itemId: 'item_x', vaultKeyVersion: 3, revision: 1 }, ct), { type: 'note', title: 't', body: 'b' });
 });
 
 test('A-5 違うパスコード、別のメンバー・接続先の組では開けない（AAD）。世代を書き換えても開けない', async () => {

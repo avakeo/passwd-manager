@@ -5,6 +5,8 @@ import { concat, toHex, utf8, type Bytes } from './bytes.ts';
 import { CryptoError } from './errors.ts';
 
 export const FORMAT_V1 = 0x01;
+// アイテムだけ v2。AAD に書き込み後のリビジョンを入れた形（2026-10-27、DeepSeek #1）。v1 のアイテムは読まない
+export const FORMAT_V2 = 0x02;
 
 // アルゴリズムIDの表（仕様書で1つの表にまとめたもの）
 export const ALG_AES_256_GCM = 0x01;
@@ -31,6 +33,10 @@ const ALG_FOR_USAGE: Record<AeadUsage | 'grant' | 'signature', number> = {
   signature: ALG_ECDSA_P256_SHA256,
 };
 
+function formatFor(usage: AeadUsage | 'grant' | 'signature'): number {
+  return usage === 'item' ? FORMAT_V2 : FORMAT_V1;
+}
+
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 // AAD の区切りの `|` が入らないよう、ID に使える文字と長さを限る。
@@ -44,8 +50,8 @@ export function assertVersion(v: number): void {
 
 function checkHeader(bytes: Uint8Array, usage: AeadUsage | 'grant' | 'signature', minLength: number): void {
   if (bytes.length < 2) throw new CryptoError('MALFORMED');
-  // 復号を試す前に、ヘッダーの形式バイトが AAD の形式（v1）と一致することを確かめる。
-  if (bytes[0] !== FORMAT_V1) throw new CryptoError('UNSUPPORTED_FORMAT');
+  // 復号を試す前に、ヘッダーの形式バイトが AAD の形式（アイテムは v2、ほかは v1）と一致することを確かめる。
+  if (bytes[0] !== formatFor(usage)) throw new CryptoError('UNSUPPORTED_FORMAT');
   if (bytes[1] !== ALG_FOR_USAGE[usage]) throw new CryptoError('UNSUPPORTED_FORMAT');
   if (bytes.length < minLength) throw new CryptoError('MALFORMED');
 }
@@ -53,7 +59,7 @@ function checkHeader(bytes: Uint8Array, usage: AeadUsage | 'grant' | 'signature'
 // アイテムと秘密鍵：形式（1B）、アルゴリズムID（1B）、ノンス（12B）、暗号文と認証タグ
 export function encodeAeadEnvelope(usage: AeadUsage, nonce: Uint8Array, ciphertext: Uint8Array): Bytes {
   if (nonce.length !== NONCE_LENGTH) throw new CryptoError('INVALID_INPUT');
-  return concat(new Uint8Array([FORMAT_V1, ALG_FOR_USAGE[usage]]), nonce, ciphertext);
+  return concat(new Uint8Array([formatFor(usage), ALG_FOR_USAGE[usage]]), nonce, ciphertext);
 }
 
 export function parseAeadEnvelope(usage: AeadUsage, bytes: Uint8Array): { nonce: Bytes; ciphertext: Bytes } {
@@ -92,14 +98,17 @@ export function parseSignatureEnvelope(bytes: Uint8Array): Bytes {
   return bytes.slice(2);
 }
 
-export type ItemContext = { itemId: string; vaultKeyVersion: number };
+// revision は、その暗号文を書き込んだ後にサーバーの行が持つリビジョン（作成は1、更新は元にしたリビジョン + 1）
+export type ItemContext = { itemId: string; vaultKeyVersion: number; revision: number };
 export type MemberKeyContext = { keyId: string; publicKeySha256: Bytes };
 
-// v1|item|<アイテムID>|<世代>
+// v2|item|<アイテムID>|<世代>|<リビジョン>
+// リビジョンを入れるので、控えた古い暗号文を今のリビジョンとして書き戻すと、復号に失敗する（C-26、S-11）。
 export function itemAad(ctx: ItemContext): Bytes {
   assertId(ctx.itemId);
   assertVersion(ctx.vaultKeyVersion);
-  return utf8(`v${FORMAT_V1}|item|${ctx.itemId}|${ctx.vaultKeyVersion}`);
+  assertVersion(ctx.revision);
+  return utf8(`v${FORMAT_V2}|item|${ctx.itemId}|${ctx.vaultKeyVersion}|${ctx.revision}`);
 }
 
 function keyAad(kind: 'member-key' | 'admin-sign-key', ctx: MemberKeyContext): Bytes {
