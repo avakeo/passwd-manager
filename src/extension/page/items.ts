@@ -3,6 +3,7 @@
 // パスワードと非表示の項目は伏せ字の欄に入れ、「表示」を押したときだけ文字にする。
 
 import { el, errorText, send } from '../shared/ui.ts';
+import { generatorPanel } from './generator.ts';
 
 type Summary = { id: string; type: 'login' | 'note' | null; title: string; username?: string; unreadable: boolean; revision: number };
 type CustomField = { type: 'text' | 'hidden' | 'date'; label: string; value: string };
@@ -10,14 +11,32 @@ type LoginItem = { type: 'login'; title: string; username: string; password: str
 type NoteItem = { type: 'note'; title: string; body: string };
 type Item = LoginItem | NoteItem;
 
-function secretInput(value: string): HTMLElement {
+// withGenerator のときは「作成」のボタンを足し、自動作成のパネルを開けるようにする（アイテムのパスワードの欄だけ）
+function secretInput(value: string, withGenerator = false): HTMLElement {
   const input = el('input', { type: 'password', value, autocomplete: 'off' });
   const toggle = el('button', { text: '表示', className: 'secondary', type: 'button' });
   toggle.addEventListener('click', () => {
     input.type = input.type === 'password' ? 'text' : 'password';
     toggle.textContent = input.type === 'password' ? '表示' : '隠す';
   });
-  const wrap = el('div', { className: 'row' }, input, toggle);
+  const row = el('div', { className: 'row' }, input, toggle);
+  const slot = el('div');
+  if (withGenerator) {
+    const create = el('button', { text: '自動作成', className: 'secondary', type: 'button' });
+    create.addEventListener('click', () => {
+      slot.replaceChildren(
+        generatorPanel(
+          (password) => {
+            input.value = password;
+            slot.replaceChildren();
+          },
+          () => slot.replaceChildren(),
+        ),
+      );
+    });
+    row.append(create);
+  }
+  const wrap = el('div', {}, row, slot);
   (wrap as unknown as { read: () => string }).read = () => input.value;
   return wrap;
 }
@@ -39,7 +58,7 @@ function editorFields(item: Item): { node: HTMLElement; read: () => Item } {
     return { node: el('div', {}, labeled('タイトル', title), labeled('本文', body)), read: () => ({ type: 'note', title: title.value, body: body.value }) };
   }
   const username = el('input', { type: 'text', value: item.username, autocomplete: 'off' });
-  const password = secretInput(item.password);
+  const password = secretInput(item.password, true);
   const urls = el('textarea');
   urls.value = item.urls.join('\n');
   const notes = el('textarea');
@@ -69,7 +88,7 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   const out = el('p', { className: 'note' });
   const form = editorFields(item);
   const area = el('div', {}, form.node);
-  const save = el('button', { text: id ? '保存' : '作る' });
+  const save = el('button', { text: id ? '保存' : '作成' });
   save.addEventListener('click', async () => {
     const mine = form.read();
     const r = await send(id ? { type: 'saveItem', id, revision, item: mine } : { type: 'saveItem', item: mine });
@@ -91,7 +110,7 @@ export function editorSection(item: Item, id: string | null, revision: number | 
     });
     actions.append(del);
   }
-  const cancel = el('button', { text: 'やめる', className: 'secondary' });
+  const cancel = el('button', { text: 'キャンセル', className: 'secondary' });
   cancel.addEventListener('click', () => done());
   actions.append(cancel);
 
@@ -146,7 +165,7 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
   }
   const r = await send({ type: 'listItems' });
   const search = el('input', { type: 'search', placeholder: '検索（タイトル、ユーザー名）' });
-  const list = el('ul');
+  const list = el('ul', { className: 'item-list' });
   const items = r.ok ? (r.items as Summary[]) : [];
   const draw = () => {
     const q = search.value.trim().toLowerCase();
@@ -154,7 +173,9 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
       ...items
         .filter((i) => q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q))
         .map((i) => {
-          const li = el('li', {}, el('span', { text: i.unreadable ? `読めないアイテム（${i.id}）` : i.title }), el('span', { text: i.username ? `  ${i.username}` : '', className: 'muted' }));
+          const label = el('div', { className: 'item-label' }, el('span', { text: i.unreadable ? `読めないアイテム（${i.id}）` : i.title || '（タイトルなし）', className: i.unreadable ? 'error' : 'item-title' }));
+          if (i.username) label.append(el('span', { text: i.username, className: 'muted' }));
+          const li = el('li', {}, label);
           if (!i.unreadable) {
             const edit = el('button', { text: '開く', className: 'secondary' });
             edit.addEventListener('click', () => open(i.id, i.type ?? 'login'));

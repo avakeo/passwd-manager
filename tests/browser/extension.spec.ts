@@ -58,6 +58,15 @@ test('拡張機能を読み込むと Service Worker が動き、ポップアッ�
   await page.close();
 });
 
+test('ログインしていない全画面ページは、ログインのボタンを出す（ポップアップは閉じて結果を見せられないので、ログインはここで行う）', async () => {
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/extension/page/app.html#login`);
+  await expect(page.getByRole('heading', { name: 'ログイン' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Discord でログイン' })).toBeVisible();
+  await expect(page.getByText('ポップアップからログインしてください')).toHaveCount(0);
+  await page.close();
+});
+
 test('E-08 本物の入口：自分の拡張機能のページからでも、表にない種類や余分な項目は処理しない。status は答える', async () => {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/extension/page/app.html`);
