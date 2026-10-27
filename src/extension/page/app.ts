@@ -1,6 +1,8 @@
 // 全画面ページ（2a）：TOTP の登録と作り直し、鍵の作成、最初の Vault、TOTP の再確認、セッションの一覧と無効化、ロック、ログアウト。
+// 2026-10-27 から、ログインとロック解除もここでできる（ポップアップは Discord の窓が開くと閉じ、ログインの結果を見せられないため）。
 // アイテムの一覧・編集は 2b。鍵は持たない。表示はすべて文字として出す（shared/ui.ts）。
 
+import { loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 
@@ -138,24 +140,44 @@ async function sessionsSection(): Promise<HTMLElement> {
   return section('セッション', 'sessions', list, out);
 }
 
-async function render(): Promise<void> {
+// ログイン。Discord の窓を閉じても、このページは残るので、結果をここに出せる
+function loginSection(): HTMLElement {
+  const out = result();
+  const button = el('button', { text: 'Discord でログイン' });
+  button.addEventListener('click', async () => {
+    const r = await send({ type: 'login', deviceLabel: 'Chrome' });
+    await render(r.ok ? undefined : errorText(r.error));
+  });
+  return section('ログイン', 'login', button, out);
+}
+
+async function render(notice?: string): Promise<void> {
   const s = await send({ type: 'status' });
   root.replaceChildren(el('h1', { text: 'teampw' }));
-  if (!s.ok || !s.loggedIn) {
-    root.append(el('p', { text: s.ok ? 'ポップアップからログインしてください。' : errorText(s.error), className: 'error' }));
+  if (notice) root.append(el('p', { text: notice, className: 'error' }));
+  if (!s.ok) {
+    root.append(el('p', { text: errorText(s.error), className: 'error' }));
+    return;
+  }
+  if (s.loginInProgress && !s.loggedIn) {
+    root.append(section('ログイン', 'login', loginTotpForm(render)));
+    return;
+  }
+  if (!s.loggedIn) {
+    root.append(loginSection());
     return;
   }
   if (s.totpSetupRequired) {
     root.append(totpSection(false));
     return;
   }
-  const notice = recoveryNotice(s.recoveryCodesRemaining);
-  if (notice) root.append(el('p', { text: notice, className: 'warn' }));
+  const recovery = recoveryNotice(s.recoveryCodesRemaining);
+  if (recovery) root.append(el('p', { text: recovery, className: 'warn' }));
   const member = s.member as { role: string };
   root.append(el('p', { text: `役割：${member.role === 'admin' ? '管理者' : 'メンバー'}　状態：${String(s.vault)}`, className: 'muted' }));
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
-  if (s.locked) root.append(el('p', { text: 'ロックされています。ポップアップからロック解除してください。', className: 'warn' }));
+  if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
     const slot = el('div');
