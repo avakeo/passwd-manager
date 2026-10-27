@@ -1,6 +1,6 @@
 # テスト用ログインページ（test-sites）
 
-拡張機能の自動入力を手で確かめるための、小さな静的サイトです。同じ `worker.ts` を **site-a** と **site-b** の2つの Cloudflare Worker としてデプロイし、オリジンが違う2つのサイトとして使います。拡張機能と API のコードには触れません。
+拡張機能の自動入力を手で確かめるための、小さな静的サイトです。同じ `worker.ts` を **site-a**（teampw-site-a）と **site-b**（teampw-site-b）の2つの Cloudflare Worker としてデプロイし、オリジンが違う2つのサイトとして使います。拡張機能と API のコードには触れません。
 
 - 外部の CSS・フォント・画像・スクリプト・アクセス解析は読み込みません。スタイルは各ページの `<style>` に書いています。
 - 応答には `Content-Security-Policy` を付け、スクリプトとスタイルは nonce で許可しています。
@@ -12,7 +12,7 @@
 | ファイル | 中身 |
 | --- | --- |
 | `test-sites/worker.ts` | Worker の入口。パスごとに HTML を返す |
-| `test-sites/wrangler.example.toml` | 設定の例（site-a と site-b の書き方をコメントで示す） |
+| `test-sites/wrangler.example.toml` | 設定の例（環境 a が site-a、環境 b が site-b） |
 | `test-sites/README.md` | このファイル |
 | `tests/test-sites/pages.test.ts` | 各パスが 200 を返し、決めた要素があることを確かめるテスト |
 
@@ -48,54 +48,20 @@
    cp test-sites/wrangler.example.toml test-sites/wrangler.toml
    ```
 
-3. site-a をデプロイする。最初は相手の URL が分からないので、`OTHER_ORIGIN = ""` にしておく。
+3. `test-sites/wrangler.toml` の `OTHER_ORIGIN` の `example` を、自分の workers.dev のサブドメインに変える。workers.dev の URL は `https://<Worker の名前>.<サブドメイン>.workers.dev` になるので、相手の URL はデプロイの前に分かる。
 
-   ```toml
-   name = "site-a"
-   main = "worker.ts"
-   compatibility_date = "2026-10-01"
-
-   [vars]
-   OTHER_ORIGIN = ""
-   ```
+4. 2つのサイトをデプロイする。
 
    ```sh
-   npx wrangler deploy --config test-sites/wrangler.toml
+   npx wrangler deploy --config test-sites/wrangler.toml --env a
+   npx wrangler deploy --config test-sites/wrangler.toml --env b
    ```
 
-   表示された URL（例：`https://site-a.example.workers.dev`）を控える。
+   表示された URL が、`OTHER_ORIGIN` に書いた値と同じか確かめる（例：`https://teampw-site-a.example.workers.dev`）。
 
-4. site-b をデプロイする。`name` と `OTHER_ORIGIN` を変える。
+5. site-a の `/` を開き、各ページへのリンクと表示を確かめる。
 
-   ```toml
-   name = "site-b"
-
-   [vars]
-   OTHER_ORIGIN = "https://site-a.example.workers.dev"
-   ```
-
-   ```sh
-   npx wrangler deploy --config test-sites/wrangler.toml
-   ```
-
-   表示された URL（例：`https://site-b.example.workers.dev`）を控える。
-
-5. site-a をもう一度デプロイする。今度は site-b の URL を入れる。
-
-   ```toml
-   name = "site-a"
-
-   [vars]
-   OTHER_ORIGIN = "https://site-b.example.workers.dev"
-   ```
-
-   ```sh
-   npx wrangler deploy --config test-sites/wrangler.toml
-   ```
-
-6. site-a の `/` を開き、各ページへのリンクと表示を確かめる。
-
-手元で見た目だけを確かめる場合は `npx wrangler dev --config test-sites/wrangler.toml` も使えます。ただし `wrangler dev` は既定で http になり、拡張機能の自動入力の対象外です。E-02 と E-13 は、デプロイした https の2つのサイトで確かめてください。
+手元で見た目だけを確かめる場合は `npx wrangler dev --config test-sites/wrangler.toml --env a` も使えます。ただし `wrangler dev` は既定で http になり、拡張機能の自動入力の対象外です。E-02 と E-13 は、デプロイした https の2つのサイトで確かめてください。
 
 ## 手で確かめるときの手順
 
