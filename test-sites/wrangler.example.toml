@@ -1,0 +1,22 @@
+# test-sites の設定例
+# このファイルを test-sites/wrangler.toml にコピーして、手元の値に変える。
+# wrangler.toml は .gitignore に入っているのでコミットしない。
+#
+# 同じ worker.ts を、環境 a と b で2つの Worker としてデプロイする。
+#   npx wrangler deploy --config test-sites/wrangler.toml --env a
+#   npx wrangler deploy --config test-sites/wrangler.toml --env b
+# workers.dev の URL は https://<Worker の名前>.<自分のサブドメイン>.workers.dev になるので、
+# 相手の URL はデプロイの前に分かる。下の `example` を自分の workers.dev のサブドメインに変える。
+
+name = "teampw-site"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+
+[env.a]
+name = "teampw-site-a"
+# もう一方のサイトのオリジン。末尾のスラッシュは付けない
+vars = { OTHER_ORIGIN = "https://teampw-site-b.example.workers.dev" }
+
+[env.b]
+name = "teampw-site-b"
+vars = { OTHER_ORIGIN = "https://teampw-site-a.example.workers.dev" }
