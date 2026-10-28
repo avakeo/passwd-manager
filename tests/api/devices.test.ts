@@ -105,6 +105,13 @@ test('A-18 パスコードを3回間違えると、端末のトークンを無�
   assert.equal((await resume(t, next, await proof('2580'))).status, 403);
 });
 
+test('A-18 回数が3に達した行は、確かめる前に断る（同時に送られて、無効にする前に3回目が数えられた場合）', async () => {
+  const t = setup();
+  const { deviceToken } = await remembered(t);
+  t.db.db.prepare('UPDATE remembered_devices SET failed_count = 3').run();
+  assert.equal((await resume(t, deviceToken, await proof('2580'))).status, 403, '正しいパスコードでも');
+});
+
 test('A-18 同時に送っても、試せるのは3回まで', async () => {
   const t = setup();
   const { deviceToken } = await remembered(t);
@@ -118,6 +125,7 @@ test('A-19 ログアウト、セッションの無効化、7日の期限、削�
   // ログアウト
   const a = await remembered(t);
   assert.equal((await t.request('POST', '/v1/auth/logout', a.m.token)).status, 204);
+  assert.notEqual(t.db.db.prepare('SELECT revoked_at FROM remembered_devices WHERE session_id = ?').get(a.m.sessionId)!.revoked_at, null, '端末の行も無効にする');
   assert.equal((await resume(t, a.deviceToken, await proof('2580'))).status, 403);
   // 別のセッションから無効にされた
   const b = await remembered(t);
