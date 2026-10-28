@@ -234,7 +234,7 @@ export function editorSection(item: Item, id: string | null, revision: number | 
   return el('section', {}, el('h2', { text: id ? 'アイテムの編集' : '新しいアイテム' }), area, actions, out);
 }
 
-export async function itemsSection(open: (id: string | null, type: 'login' | 'note') => void): Promise<HTMLElement> {
+export async function itemsSection(open: (id: string | null, type: 'login' | 'note') => void, openImport: () => void): Promise<HTMLElement> {
   const out = el('p', { className: 'note' });
   const s = await send({ type: 'sync' });
   if (!s.ok) {
@@ -269,8 +269,10 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
   newLogin.addEventListener('click', () => open(null, 'login'));
   const newNote = el('button', { text: '新しいメモ', className: 'secondary' });
   newNote.addEventListener('click', () => open(null, 'note'));
+  const importCsv = el('button', { text: 'CSV から取り込む', className: 'secondary' });
+  importCsv.addEventListener('click', () => openImport());
   if (!r.ok) out.textContent = errorText(r.error);
-  return el('section', {}, el('h2', { text: 'アイテム' }), el('div', { className: 'row' }, newLogin, newNote), search, list, out);
+  return el('section', {}, el('h2', { text: 'アイテム' }), el('div', { className: 'row' }, newLogin, newNote, importCsv), search, list, out);
 }
 
 export function passcodeSection(onDone: () => void): HTMLElement {

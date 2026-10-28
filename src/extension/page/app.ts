@@ -5,6 +5,7 @@
 import { loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
+import { importSection } from './import.ts';
 
 const root = document.getElementById('root')!;
 
@@ -182,7 +183,7 @@ async function render(notice?: string): Promise<void> {
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
     const slot = el('div');
-    const showList = async () => slot.replaceChildren(await itemsSection(open));
+    const showList = async () => slot.replaceChildren(await itemsSection(open, () => slot.replaceChildren(importSection(() => void showList()))));
     const open = async (id: string | null, type: 'login' | 'note') => {
       if (id === null) return slot.replaceChildren(editorSection(blankItem(type), null, null, () => void showList()));
       const got = await openItem(id);
