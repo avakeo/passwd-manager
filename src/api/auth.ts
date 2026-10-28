@@ -67,6 +67,7 @@ const PENDING_ROUTES = new Set([
   'DELETE /v1/me/sessions/:id',
   'POST /v1/me/totp',
   'POST /v1/me/totp/confirm',
+  'POST /v1/me/devices', // この端末を覚える（2026-10-29 追記）
 ]);
 
 // TOTP は全員必須。登録していない人が使える入口。管理操作だけでなく、読み書きも GET /v1/me もできない（A-11）

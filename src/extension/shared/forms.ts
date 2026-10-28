@@ -19,6 +19,22 @@ export function loginTotpForm(onDone: Done): HTMLElement {
   return el('div', {}, el('p', { text: '認証アプリのコード（または回復コード）を入れてください。', className: 'note' }), form);
 }
 
+// この端末を覚えた後、ブラウザを開き直したときのフォーム（2026-10-29 追記）。間違いはサーバーが数え、3回で忘れる
+export function deviceResumeForm(onDone: Done): HTMLElement {
+  const form = el('form');
+  const pin = el('input', { type: 'password', placeholder: '4桁のパスコード', autocomplete: 'off' });
+  form.append(pin, el('button', { text: 'パスコードで戻る' }));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = pin.value;
+    pin.value = '';
+    const r = await send({ type: 'resumeDevice', pin: value });
+    if (r.ok) return onDone();
+    await onDone(r.error === 'BAD_PASSCODE' ? `パスコードが違います。あと ${Number(r.attemptsLeft)} 回間違えると、この端末を忘れます` : errorText(r.error));
+  });
+  return el('div', {}, el('p', { text: 'この端末を覚えています。4桁のパスコードで戻れます（Discord と認証アプリは要りません）。', className: 'note' }), form);
+}
+
 // ロックされているときのフォーム。クイックロック解除（4桁）は、使えるときだけ出す。5回間違えると消え、マスターパスワードに戻る
 export function unlockForms(quickUnlockAvailable: boolean, onDone: Done): HTMLElement {
   const wrap = el('div');

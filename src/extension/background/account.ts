@@ -7,8 +7,15 @@ import { ApiError } from './api-client.ts';
 import { groupBase32 } from './api-shapes.ts';
 import { Fail, QUICK_UNLOCK_MAX_FAILURES, type Context, type Handler } from './context.ts';
 import type { createPasscode } from './passcode.ts';
+import type { createSessionUnlock } from './session-unlock.ts';
+import type { createDevice } from './device.ts';
 
-export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof createPasscode>, 'quickKey' | 'parseQuick'>) {
+export function createAccount(
+  ctx: Context,
+  passcode: Pick<ReturnType<typeof createPasscode>, 'quickKey' | 'parseQuick'>,
+  session: Pick<ReturnType<typeof createSessionUnlock>, 'enabled'>,
+  device: Pick<ReturnType<typeof createDevice>, 'available' | 'forget'>,
+) {
   const { deps, chrome, sessions, api, state, lock, readySession, expect, getMe } = ctx;
   const { quickKey, parseQuick } = passcode;
 
@@ -25,7 +32,7 @@ export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof cre
         quickUnlockAvailable: quick !== null && quick.failures < QUICK_UNLOCK_MAX_FAILURES,
         cacheFull: state.cacheFull,
       };
-      if (!s) return { ...base, loggedIn: false };
+      if (!s) return { ...base, loggedIn: false, deviceResumeAvailable: await device.available() };
       if (s.totpSetupRequired) return { ...base, loggedIn: true, totpSetupRequired: true, member: { id: s.memberId, role: s.role } };
       let me;
       try {
@@ -43,11 +50,15 @@ export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof cre
         hasKey: me.key !== null,
         vault: me.key === null ? 'no-key' : base.vault,
         recoveryCodesRemaining: me.recoveryCodesRemaining,
+        keepUnlocked: await session.enabled(me.id),
+        deviceRemembered: await device.available(),
       };
     },
 
     async login(m) {
       await lock();
+      // 新しくログインするなら、前に覚えた端末のトークンは使わない（覚えるなら、ログインの後にもう一度）
+      await device.forget();
       const req = await createLoginRequest({ clientId: deps.discordClientId, redirectUri: chrome.identity.getRedirectURL() });
       let redirected: string | undefined;
       try {
@@ -96,6 +107,7 @@ export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof cre
       // 先に手元を消す（更新の途中でも、遅れて終わった更新は書き戻さない）
       const s = await sessions.get();
       await sessions.clear();
+      await device.forget(); // サーバーでも、ログアウトでセッションと一緒に無効になる
       await lock();
       if (s) {
         try {

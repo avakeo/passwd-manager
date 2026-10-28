@@ -216,6 +216,8 @@ export function registerAuthRoutes(app: Hono<Env>): void {
   });
 
   app.post('/v1/auth/logout', async (c) => {
+    // 覚えた端末も、セッションと一緒に無効にする（この端末を覚える）
+    await c.env.DB.prepare('UPDATE remembered_devices SET revoked_at = ? WHERE session_id = ? AND revoked_at IS NULL').bind(Date.now(), c.get('principal').sessionId).run();
     await revokeSession(c.env.DB, c.get('principal').sessionId);
     return c.body(null, 204);
   });

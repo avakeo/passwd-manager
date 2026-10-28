@@ -293,3 +293,22 @@ select {
   padding-left: 8px;
   margin: 8px 0;
 }
+
+/* ポップアップのアイテム：名前とユーザー名を上に1行ずつ（長ければ … で切る）、ボタンを下に並べる */
+.popup-item .item-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-item .row {
+  margin-top: 4px;
+}
+
+.popup-item .row > button {
+  padding: 4px 10px;
+}
+
+.popup-item p:empty {
+  display: none;
+}

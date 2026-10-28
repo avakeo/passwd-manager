@@ -2,7 +2,7 @@
 // 鍵は持たない。マスターパスワードは Service Worker に1回だけ送り、送ったら入力欄を空にする。
 // ログインは全画面ページで行う。Discord の窓が開くとポップアップは閉じ、結果を見せられないため（2026-10-27）。
 
-import { loginTotpForm, unlockForms } from '../shared/forms.ts';
+import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, pageUrl, recoveryNotice, send } from '../shared/ui.ts';
 
 const root = document.getElementById('root')!;
@@ -29,7 +29,8 @@ async function render(notice?: string): Promise<void> {
     return;
   }
   if (!s.loggedIn) {
-    const button = el('button', { text: 'Discord でログイン' });
+    if (s.deviceResumeAvailable) root.append(deviceResumeForm(render));
+    const button = el('button', { text: 'Discord でログイン', className: s.deviceResumeAvailable ? 'secondary' : '' });
     button.addEventListener('click', () => openPage('#login'));
     root.append(message('全画面ページを開いてログインします。'), button);
     return;
@@ -126,7 +127,8 @@ function itemRow(i: Summary, tabId: number | null, matches: boolean): HTMLElemen
     });
     buttons.append(copy);
   }
-  return el('li', {}, el('div', { className: 'row-between' }, label, buttons), out);
+  // ポップアップは幅が狭いので、名前を上の1行に、ボタンをその下に並べる
+  return el('li', { className: 'popup-item' }, label, buttons, out);
 }
 
 // 一覧（タイトルとユーザー名だけ。パスワードはポップアップに渡さない）。同期と一覧は放置のロックを延ばさない

@@ -183,11 +183,11 @@ test('S-09 キャッシュが容量を超えても、最後に見た Vault リ�
   assert.equal((await send(w, { type: 'sync' })).error, 'ROLLBACK_DETECTED');
 });
 
-test('同期は放置のロックを延ばさない：sync と listItems だけを送り続けても、最後の操作から15分でロックされる', async () => {
+test('同期は放置のロックを延ばさない：sync と listItems だけを送り続けても、最後の操作から45分でロックされる', async () => {
   const w = world(discord);
   await adminReady(w, discord);
   let lockedAt: number | null = null;
-  for (let ms = IDLE_LOCK_MS - 1000; ms <= 60 * MIN; ms += IDLE_LOCK_MS - 1000) {
+  for (let ms = IDLE_LOCK_MS - 1000; ms <= 4 * IDLE_LOCK_MS; ms += IDLE_LOCK_MS - 1000) {
     mock.timers.setTime(T0 + ms);
     await send(w, { type: 'sync' });
     await send(w, { type: 'listItems' });

@@ -14,8 +14,9 @@ const TITLES: Record<number, string> = {
 
 export type ProblemStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502;
 
-export function problem(status: ProblemStatus): Response {
-  return new Response(JSON.stringify({ type: 'about:blank', title: TITLES[status], status }), {
+// extra は RFC 9457 の拡張の項目（残りの試行回数など）。内部の詳細は入れない
+export function problem(status: ProblemStatus, extra: Record<string, number> = {}): Response {
+  return new Response(JSON.stringify({ type: 'about:blank', title: TITLES[status], status, ...extra }), {
     status,
     headers: { 'Content-Type': 'application/problem+json' },
   });
@@ -23,9 +24,11 @@ export function problem(status: ProblemStatus): Response {
 
 export class HttpProblem extends Error {
   readonly status: ProblemStatus;
+  readonly extra: Record<string, number>;
 
-  constructor(status: ProblemStatus) {
+  constructor(status: ProblemStatus, extra: Record<string, number> = {}) {
     super(TITLES[status]);
     this.status = status;
+    this.extra = extra;
   }
 }

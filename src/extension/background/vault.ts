@@ -14,7 +14,8 @@ import { grantFromApi, keyBody, keyRecordFromMe } from './api-shapes.ts';
 import { chromePinStore } from './storage.ts';
 import { Fail, type Context, type Handler, type Reply, type Unlocked, type VaultState } from './context.ts';
 
-export function createVault(ctx: Context) {
+// afterPasswordUnlock：マスターパスワードで解除できた直後に呼ぶ（ロック解除を保つ設定なら、Vault 鍵を置き直す）
+export function createVault(ctx: Context, afterPasswordUnlock: () => Promise<void> = async () => undefined) {
   const { chrome, apiOrigin, api, state, lock, stillCurrent, readySession, trustFor, expect, getMe } = ctx;
 
   // 自分宛てのグラントを、固定した管理者の鍵で確かめてから開く。開けない理由は状態として返す
@@ -69,12 +70,13 @@ export function createVault(ctx: Context) {
     }
     state.vaultState = opened;
     state.unlockedBy = 'password';
+    await afterPasswordUnlock();
     return { ok: true, vault: state.vaultState };
   }
 
   const handlers = {
     async createKey(m) {
-      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      if (state.unlockedBy === 'passcode' || state.unlockedBy === 'session') throw new Fail('PASSWORD_REQUIRED'); // E-17
       const epoch = state.lockEpoch;
       await readySession();
       const me = await getMe();
@@ -116,7 +118,7 @@ export function createVault(ctx: Context) {
     // 自分の署名鍵を固定し、最後に見た世代を1にしてから作る（暗号コアは、固定と世代がそろうまでグラントを作らない）
     async initVault() {
       await readySession();
-      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      if (state.unlockedBy === 'passcode' || state.unlockedBy === 'session') throw new Fail('PASSWORD_REQUIRED'); // E-17
       if (state.unlocked === null) throw new Fail('LOCKED');
       const u = state.unlocked;
       if (u.role !== 'admin' || !u.signPublicKey || !u.signPrivateKey) throw new Fail('NOT_ADMIN');

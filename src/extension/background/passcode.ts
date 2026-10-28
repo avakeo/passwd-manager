@@ -52,7 +52,7 @@ export function createPasscode(ctx: Context) {
     // パスコードの設定：マスターパスワードで解除した後だけ。グラントを取り出し可として開き直し、包んだらすぐ消す
     async setupQuickUnlock(m) {
       await readySession();
-      if (state.unlockedBy === 'passcode') throw new Fail('PASSWORD_REQUIRED'); // E-17
+      if (state.unlockedBy === 'passcode' || state.unlockedBy === 'session') throw new Fail('PASSWORD_REQUIRED'); // E-17
       if (state.unlocked === null) throw new Fail('LOCKED');
       if (state.vaultState !== 'ready') throw new Fail('VAULT_NOT_READY');
       const u = state.unlocked;

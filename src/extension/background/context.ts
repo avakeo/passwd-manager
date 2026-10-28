@@ -11,7 +11,7 @@ import type { MeKey } from './api-shapes.ts';
 import type { Bytes } from '../../crypto/bytes.ts';
 import { openTrust, type GrantTrust, type TrustStorage } from '../../crypto/signer.ts';
 
-export const IDLE_LOCK_MS = 15 * 60 * 1000;
+export const IDLE_LOCK_MS = 45 * 60 * 1000; // 2026-10-29 に15分から延ばした（仕様書「拡張機能の構成」）
 export const LAST_ACTIVITY_KEY = 'teampw/v1/last-activity';
 // ロックで消す、ロック解除のための保存（2b のクイックロック解除が使う）
 export const UNLOCK_KEY_PREFIX = 'teampw/v1/unlock|';
@@ -67,7 +67,8 @@ export type BackgroundState = {
   // 鍵を捨てて何もしない（Codex #3）
   lockEpoch: number;
   // どの方法で解除したか。パスコードで戻った状態は Vault 鍵だけで、秘密鍵（unlocked）は持たない（E-17）
-  unlockedBy: 'password' | 'passcode' | null;
+  // 'session' はロック解除を保つ設定で戻った状態（session-unlock.ts）。passcode と同じく秘密鍵を持たない
+  unlockedBy: 'password' | 'passcode' | 'session' | null;
   vaultVersion: number | null; // 開いた Vault 鍵の世代
   // 同期の状態（メモリ）。暗号文は storage.local にもキャッシュする。平文の一覧（summary）はメモリだけ
   readonly index: Map<string, CacheEntry & { summary: Summary }>;

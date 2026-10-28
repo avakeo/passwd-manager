@@ -110,7 +110,7 @@ test('E-17 パスコードで戻った状態で、新しい世代（ローテー
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
 });
 
-test('E-18 ブラウザを閉じると（storage.session が消える）、パスコードは使えない。ロックと15分の放置でも消える', async () => {
+test('E-18 ブラウザを閉じると（storage.session が消える）、パスコードは使えない。ロックと45分の放置でも消える', async () => {
   const w = await stoppedWithPasscode();
   w.chrome.storage.session.clear();
   restart(w);
@@ -120,9 +120,9 @@ test('E-18 ブラウザを閉じると（storage.session が消える）、パ�
   const v = await stoppedWithPasscode();
   await send(v, { type: 'lock' }, POPUP);
   assert.equal(quickRecord(v), undefined);
-  // 15分の放置
+  // 45分の放置
   const x = await stoppedWithPasscode();
-  mock.timers.setTime(T0 + 16 * 60 * 1000);
+  mock.timers.setTime(T0 + 46 * 60 * 1000);
   restart(x);
   await x.bg.onStartup();
   assert.equal(quickRecord(x), undefined);

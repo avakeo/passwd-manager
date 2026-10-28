@@ -2,9 +2,10 @@
 // 2026-10-27 から、ログインとロック解除もここでできる（ポップアップは Discord の窓が開くと閉じ、ログインの結果を見せられないため）。
 // アイテムの一覧・編集は 2b。鍵は持たない。表示はすべて文字として出す（shared/ui.ts）。
 
-import { loginTotpForm, unlockForms } from '../shared/forms.ts';
-import { el, errorText, recoveryNotice, send } from '../shared/ui.ts';
+import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts';
+import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
+import { importSection } from './import.ts';
 
 const root = document.getElementById('root')!;
 
@@ -120,11 +121,18 @@ function stepUpSection(): HTMLElement {
 async function sessionsSection(): Promise<HTMLElement> {
   const out = result();
   const r = await send({ type: 'listSessions' });
-  const list = el('ul');
+  // アイテムの一覧と同じ行の形（名前を左、ボタンを右。行の間に線）
+  const list = el('ul', { className: 'item-list' });
   if (r.ok) {
     for (const s of r.sessions as { id: string; deviceLabel: string; current: boolean; createdAt: number }[]) {
       // 端末名は文字として表示する（DeepSeek #2）
-      const item = el('li', {}, el('span', { text: s.deviceLabel }), el('span', { text: ` ${new Date(s.createdAt).toLocaleString()}${s.current ? '（この端末）' : ''}`, className: 'muted' }));
+      const label = el(
+        'div',
+        { className: 'item-label' },
+        el('span', { text: `${s.deviceLabel}${s.current ? '（この端末）' : ''}`, className: 'item-title' }),
+        el('span', { text: `ログイン：${new Date(s.createdAt).toLocaleString()}`, className: 'muted' }),
+      );
+      const item = el('li', {}, label);
       if (!s.current) {
         const revoke = el('button', { text: '無効にする', className: 'secondary' });
         revoke.addEventListener('click', async () => {
@@ -140,19 +148,98 @@ async function sessionsSection(): Promise<HTMLElement> {
   return section('セッション', 'sessions', list, out);
 }
 
-// ログイン。Discord の窓を閉じても、このページは残るので、結果をここに出せる
-function loginSection(): HTMLElement {
+// ログイン。Discord の窓を閉じても、このページは残るので、結果をここに出せる。覚えた端末なら、パスコードの欄も出す
+function loginSection(deviceResumeAvailable: boolean): HTMLElement {
   const out = result();
-  const button = el('button', { text: 'Discord でログイン' });
+  const button = el('button', { text: 'Discord でログイン', className: deviceResumeAvailable ? 'secondary' : '' });
   button.addEventListener('click', async () => {
     const r = await send({ type: 'login', deviceLabel: 'Chrome' });
     await render(r.ok ? undefined : errorText(r.error));
   });
-  return section('ログイン', 'login', button, out);
+  return deviceResumeAvailable ? section('ログイン', 'login', deviceResumeForm(render), button, out) : section('ログイン', 'login', button, out);
+}
+
+// この端末を覚える（2026-10-29 追記）。ログインから7日まで、ブラウザを開き直しても4桁のパスコードで戻れる
+function rememberSection(remembered: boolean): HTMLElement {
+  const out = result();
+  if (remembered) {
+    const forget = el('button', { text: 'この端末を忘れる', className: 'secondary' });
+    forget.addEventListener('click', async () => {
+      await send({ type: 'forgetDevice' });
+      await render();
+    });
+    return section('この端末を覚える', 'remember', el('p', { text: 'この端末を覚えています。ブラウザを開き直したら、4桁のパスコードで戻れます（ログインから7日まで）。', className: 'muted' }), forget, out);
+  }
+  const form = el('form');
+  const p1 = el('input', { type: 'password', placeholder: '4桁の数字', autocomplete: 'off' });
+  const p2 = el('input', { type: 'password', placeholder: 'もう一度', autocomplete: 'off' });
+  form.append(p1, p2, el('button', { text: '覚える' }));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [a, b] = [p1.value, p2.value];
+    p1.value = '';
+    p2.value = '';
+    if (a !== b) {
+      out.textContent = '2回の入力が違います';
+      out.className = 'error';
+      return;
+    }
+    const r = await send({ type: 'rememberDevice', pin: a });
+    if (r.ok) return render();
+    out.textContent = r.error === 'STEP_UP_REQUIRED' ? 'ログインから5分を過ぎました。「設定とセキュリティ」の TOTP の再確認をしてから、もう一度押してください。' : errorText(r.error);
+    out.className = 'error';
+  });
+  return section(
+    'この端末を覚える',
+    'remember',
+    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（5分以内）に決めてください。', className: 'muted' }),
+    form,
+    out,
+  );
+}
+
+// ロック解除を保つ（2026-10-29 追記）。オンにするのはマスターパスワードで解除した状態からだけ
+function keepUnlockedSection(on: boolean, canEnable: boolean): HTMLElement {
+  const out = result();
+  const toggle = el('input', { type: 'checkbox', className: 'switch' });
+  toggle.checked = on;
+  toggle.disabled = !on && !canEnable;
+  toggle.addEventListener('change', async () => {
+    const r = await send({ type: 'setKeepUnlocked', enabled: toggle.checked });
+    if (!r.ok) toggle.checked = !toggle.checked;
+    show(out, r, r.keepUnlocked ? 'オンにしました。ブラウザを閉じるまで、入力なしで使えます。' : 'オフにしました。');
+  });
+  return section(
+    'ロック解除を保つ',
+    'keep-unlocked',
+    el('label', { className: 'toggle' }, toggle, el('span', { text: 'ブラウザを閉じるまで、マスターパスワードなしで使う' })),
+    el('p', {
+      text: 'Vault 鍵を、ブラウザのメモリ（ディスクには書かない）に置きます。ロックを押す、45分放置する、ブラウザを閉じると消えます。その間にこのブラウザを触れる人は、アイテムをすべて見られます。管理操作には、いつもマスターパスワードが要ります。',
+      className: 'muted',
+    }),
+    ...(on || canEnable ? [] : [el('p', { text: 'オンにするには、マスターパスワードでロック解除してください。', className: 'muted' })]),
+    out,
+  );
+}
+
+// 今ロック解除だけの画面を出しているか（タブに戻ったときに、描き直すかを決める）
+let showingLock = false;
+
+// ロック中の画面：マスターパスワード（使えるならパスコードも）の欄と、ログアウトだけ
+function lockScreen(quickUnlockAvailable: boolean): HTMLElement {
+  const logout = el('button', { text: 'ログアウト', className: 'secondary' });
+  logout.addEventListener('click', async () => {
+    await send({ type: 'logout' });
+    await render();
+  });
+  const s = section('ロック解除', 'unlock', unlockForms(quickUnlockAvailable, render), el('div', { className: 'row' }, logout));
+  queueMicrotask(() => s.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')?.focus());
+  return s;
 }
 
 async function render(notice?: string): Promise<void> {
   const s = await send({ type: 'status' });
+  showingLock = false;
   root.replaceChildren(el('h1', { text: 'teampw' }));
   if (notice) root.append(el('p', { text: notice, className: 'error' }));
   if (!s.ok) {
@@ -164,11 +251,17 @@ async function render(notice?: string): Promise<void> {
     return;
   }
   if (!s.loggedIn) {
-    root.append(loginSection());
+    root.append(loginSection(s.deviceResumeAvailable === true));
     return;
   }
   if (s.totpSetupRequired) {
     root.append(totpSection(false));
+    return;
+  }
+  // 鍵があってロックされているときは、ロック解除の欄だけを出す（一覧や設定は解除してから）
+  if (s.locked && s.hasKey === true) {
+    showingLock = true;
+    root.append(lockScreen(s.quickUnlockAvailable === true));
     return;
   }
   const recovery = recoveryNotice(s.recoveryCodesRemaining);
@@ -179,10 +272,12 @@ async function render(notice?: string): Promise<void> {
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
   if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
+  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の5分以内に決めるため）。覚えた後は設定の中に置く
+  if (s.deviceRemembered === false) root.append(rememberSection(false));
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
     const slot = el('div');
-    const showList = async () => slot.replaceChildren(await itemsSection(open));
+    const showList = async () => slot.replaceChildren(await itemsSection(open, () => slot.replaceChildren(importSection(() => void showList()))));
     const open = async (id: string | null, type: 'login' | 'note') => {
       if (id === null) return slot.replaceChildren(editorSection(blankItem(type), null, null, () => void showList()));
       const got = await openItem(id);
@@ -195,6 +290,8 @@ async function render(notice?: string): Promise<void> {
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
+  if (s.deviceRemembered === true) settings.append(rememberSection(true));
+  if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   settings.append(stepUpSection(), await sessionsSection(), totpSection(true));
   if (s.hasKey === true) settings.append(keySection(true));
@@ -214,6 +311,17 @@ async function render(notice?: string): Promise<void> {
   if (target && settings.contains(target)) settings.open = true;
   if (target) target.scrollIntoView();
 }
+
+// 操作の途中でロックされていると分かったら（放置のロックなど）、ロック解除だけの画面に描き直す
+onLocked(() => {
+  if (!showingLock) void render();
+});
+// タブに戻ったときも確かめる。status は放置の時刻を新しくしない
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || showingLock) return;
+  const s = await send({ type: 'status' });
+  if (s.ok && s.locked && s.hasKey === true) await render();
+});
 
 // 全画面ページを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない
 void send({ type: 'opened' }).then(() => render());

@@ -19,9 +19,18 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props =
   return node;
 }
 
-export function send(message: Record<string, unknown>): Promise<Reply> {
+// ロックされていると分かったときに呼ぶ（全画面ページが、ロック解除だけの画面に描き直すのに使う）
+let lockedHandler: (() => void) | null = null;
+
+export function onLocked(handler: () => void): void {
+  lockedHandler = handler;
+}
+
+export async function send(message: Record<string, unknown>): Promise<Reply> {
   const runtime = (globalThis as unknown as { chrome: { runtime: { sendMessage(m: unknown): Promise<Reply> } } }).chrome.runtime;
-  return runtime.sendMessage(message);
+  const reply = await runtime.sendMessage(message);
+  if (reply?.error === 'LOCKED' && lockedHandler) queueMicrotask(lockedHandler);
+  return reply;
 }
 
 export function pageUrl(path: string): string {
@@ -55,6 +64,8 @@ const ERRORS: Record<string, string> = {
   TOO_LARGE: 'アイテムが大きすぎます',
   VAULT_NOT_READY: 'まだ Vault を開けていません',
   MEMBER_MISMATCH: 'サーバーの応答が、ログインした人と食い違っています',
+  DEVICE_FORGOTTEN: 'この端末を忘れました（3回間違えた、ログアウトした、または7日たった）。Discord でログインしてください',
+  NO_DEVICE: 'この端末は覚えていません。Discord でログインしてください',
 };
 
 export function errorText(code: string | undefined): string {

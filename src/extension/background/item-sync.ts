@@ -7,8 +7,13 @@
 import { fromBase64Url, toBase64Url } from '../../crypto/bytes.ts';
 import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts';
 import { newId } from '../../crypto/random.ts';
-import { validateItem, type ClientItem } from '../../client/item-data.ts';
+import { validateItem, type ClientItem, type LoginItem } from '../../client/item-data.ts';
+import { importCsvPreview, type CsvFormat } from '../../client/csv-import.ts';
 import { Fail, type CacheEntry, type CacheRecord, type Context, type Handler, type Reply, type Summary, type VaultState } from './context.ts';
+
+// CSV インポートの1回の送信の上限（src/api/app.ts と同じ。仕様書「CSVインポート」）
+export const IMPORT_MAX_ITEMS = 500;
+export const IMPORT_MAX_BYTES = 1_500_000;
 
 export function createItemSync(ctx: Context, openVault: () => Promise<VaultState>) {
   const { chrome, apiOrigin, api, state, lock, stillCurrent, alive, readySession, expect } = ctx;
@@ -238,6 +243,75 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
       await putEntry(id, { revision: Number(body.revision), vaultKeyVersion: state.vaultVersion!, ciphertext }, epoch);
       await saveCache(memberId);
       return { ok: true, id, revision: Number(body.revision) };
+    },
+
+    // CSV のプレビュー（11.5）。既存のアイテムとの重複を見るため、ここで作る。既存のパスワードは返さない（印だけ）
+    async previewCsv(m) {
+      const memberId = await vaultMember();
+      await loadCache(memberId);
+      const epoch = state.lockEpoch;
+      const existing: LoginItem[] = [];
+      for (const [id, e] of state.index) {
+        const item = await openEntry(id, e).catch(() => null);
+        if (item?.type === 'login') existing.push(item);
+      }
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      const preview = importCsvPreview(String(m.csv), m.format as CsvFormat, existing);
+      return { ok: true, items: preview.items, errors: preview.errors, warnings: preview.warnings };
+    },
+
+    // 選んだ行を、1件ずつ暗号化して（AAD のリビジョンは1）、500件・1.5MB ごとに分けて送る。
+    // 1回の送信は全部入るか全部入らないかのどちらか。途中で失敗したら止めて、入った件数を返す（判断待ち5）
+    async importItems(m) {
+      const memberId = await vaultMember();
+      await loadCache(memberId);
+      const epoch = state.lockEpoch;
+      const items = m.items as ClientItem[]; // messages.ts で1件ずつ validateItem を通した値
+      const version = state.vaultVersion!;
+      const base = JSON.stringify({ vault_key_version: version, items: [] }).length;
+      let imported = 0;
+      let chunk: { id: string; ciphertext: string }[] = [];
+      let bytes = base;
+      const flush = async (): Promise<string | null> => {
+        const res = await api.call('POST', '/v1/items/import', { vault_key_version: version, items: chunk });
+        if (res.status === 201) {
+          imported += chunk.length;
+          chunk = [];
+          bytes = base;
+          return null;
+        }
+        // 鍵の世代が違うならローテーションの後。送り直さずにマスターパスワードを求める（saveItem と同じ）
+        if (res.status === 409 && (await generationChanged(epoch))) {
+          await lock();
+          return 'PASSWORD_REQUIRED';
+        }
+        return res.status === 409 ? 'CONFLICT' : res.status === 413 ? 'TOO_LARGE' : res.status === 429 ? 'RATE_LIMITED' : 'SERVER';
+      };
+      let error: string | null = null;
+      try {
+        for (const item of items) {
+          if (!(await stillCurrent(epoch))) {
+            error = 'LOCKED';
+            break;
+          }
+          const id = newId('item');
+          const entry = { id, ciphertext: await encryptFor(id, 1, item) };
+          const length = JSON.stringify(entry).length; // base64url と ID だけなので、文字数がそのままバイト数
+          // 足すと上限を超えるなら、先に今までの分を送る（配列の区切りのカンマも数える）
+          if (chunk.length > 0 && (chunk.length >= IMPORT_MAX_ITEMS || bytes + 1 + length > IMPORT_MAX_BYTES)) {
+            error = await flush();
+            if (error) break;
+          }
+          bytes += length + (chunk.length > 0 ? 1 : 0);
+          chunk.push(entry);
+        }
+        if (!error && chunk.length > 0) error = await flush();
+      } catch (e) {
+        error = e instanceof Fail ? e.code : 'SERVER';
+      }
+      // 入った分を一覧に入れる。同期に失敗しても、入った件数は返す
+      if (imported > 0 && error !== 'LOCKED' && error !== 'PASSWORD_REQUIRED') await sync().catch(() => undefined);
+      return error ? { ok: false, error, imported } : { ok: true, imported };
     },
 
     async deleteItem(m) {
