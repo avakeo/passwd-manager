@@ -132,3 +132,14 @@ test('承認待ちのメンバーがいても、有効なメンバーの分だ�
   assert.deepEqual(await send(w, { type: 'rotateVault' }), { ok: true, vaultKeyVersion: 2, items: 3 });
   assert.equal(Number(w.t.db.db.prepare('SELECT COUNT(*) AS n FROM vault_key_grants').get()!.n), 2, '管理者と承認済みのメンバー');
 });
+
+test('ロック解除を保つ設定なら、ローテーションの後に新しい世代の鍵で置き直す（止まった後も入力なしで戻る）', async () => {
+  const { w } = await team();
+  assert.equal((await send(w, { type: 'setKeepUnlocked', enabled: true })).ok, true);
+  assert.equal((await send(w, { type: 'rotateVault' })).ok, true);
+  const rec = [...w.chrome.storage.session.values.entries()].find(([k]) => k.startsWith('teampw/v1/unlock|session|'))![1] as { vaultKeyVersion: number };
+  assert.equal(rec.vaultKeyVersion, 2);
+  restart(w);
+  assert.equal((await send(w, { type: 'status' }, POPUP)).unlockedBy, 'session');
+  assert.deepEqual(await titles(w), ['A', 'B', 'M']);
+});

@@ -34,7 +34,8 @@ function grantBody(g: Grant) {
 // ローテーションの1回の送信の上限（src/api/app.ts と同じ）
 export const ROTATE_MAX_BYTES = 1_500_000;
 
-export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, sync: () => Promise<number>) {
+// afterRotate：ローテーションで鍵を切り替えた後に呼ぶ（ロック解除を保つ設定なら、新しい世代の鍵で置き直す）
+export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, sync: () => Promise<number>, afterRotate: () => Promise<void> = async () => undefined) {
   const { chrome, apiOrigin, api, state, lock, stillCurrent, readySession, trustFor, expect, getMe } = ctx;
 
   async function fetchMembers(): Promise<{ members: ApiMember[]; current: number }> {
@@ -280,6 +281,7 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
       if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
       state.vaultKey = newKey;
       state.vaultVersion = next;
+      await afterRotate();
       await sync().catch(() => undefined);
       return { ok: true, vaultKeyVersion: next, items: items.length };
     },
