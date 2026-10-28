@@ -121,11 +121,18 @@ function stepUpSection(): HTMLElement {
 async function sessionsSection(): Promise<HTMLElement> {
   const out = result();
   const r = await send({ type: 'listSessions' });
-  const list = el('ul');
+  // アイテムの一覧と同じ行の形（名前を左、ボタンを右。行の間に線）
+  const list = el('ul', { className: 'item-list' });
   if (r.ok) {
     for (const s of r.sessions as { id: string; deviceLabel: string; current: boolean; createdAt: number }[]) {
       // 端末名は文字として表示する（DeepSeek #2）
-      const item = el('li', {}, el('span', { text: s.deviceLabel }), el('span', { text: ` ${new Date(s.createdAt).toLocaleString()}${s.current ? '（この端末）' : ''}`, className: 'muted' }));
+      const label = el(
+        'div',
+        { className: 'item-label' },
+        el('span', { text: `${s.deviceLabel}${s.current ? '（この端末）' : ''}`, className: 'item-title' }),
+        el('span', { text: `ログイン：${new Date(s.createdAt).toLocaleString()}`, className: 'muted' }),
+      );
+      const item = el('li', {}, label);
       if (!s.current) {
         const revoke = el('button', { text: '無効にする', className: 'secondary' });
         revoke.addEventListener('click', async () => {
