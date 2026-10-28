@@ -101,6 +101,11 @@ export const ROWS: Row[] = [
     body: () => ({ id: `item_${'B'.repeat(22)}`, vault_key_version: 1, ciphertext: fakeCiphertext() }),
     expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
   },
+  // フェーズ4a：メンバーと監査ログ。管理操作の中身は空や知らない人（400・404）で、許可のマスでは 401・403 にならないことだけを見る
+  { name: 'GET /v1/members', method: 'GET', path: () => '/v1/members', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 'ok') },
+  { name: 'POST /v1/members/{id}/approve', method: 'POST', path: () => '/v1/members/member_none/approve', body: () => ({}), expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
+  { name: 'DELETE /v1/members/{id}', method: 'DELETE', path: () => '/v1/members/member_none', expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
+  { name: 'GET /v1/audit-logs', method: 'GET', path: () => '/v1/audit-logs', expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
   {
     name: 'POST /v1/items/import',
     method: 'POST',

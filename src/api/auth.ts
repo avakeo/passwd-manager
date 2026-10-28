@@ -74,7 +74,9 @@ const PENDING_ROUTES = new Set([
 const TOTP_SETUP_ROUTES = new Set(['POST /v1/me/totp', 'POST /v1/me/totp/confirm', 'POST /v1/auth/logout']);
 
 export function routeKey(method: string, path: string): string {
-  const p = path.replace(/^\/v1\/me\/sessions\/[^/]+$/, '/v1/me/sessions/:id').replace(/^\/v1\/items\/[^/]+$/, '/v1/items/:id');
+  const p = path.replace(/^\/v1\/me\/sessions\/[^/]+$/, '/v1/me/sessions/:id').replace(/^\/v1\/items\/[^/]+$/, '/v1/items/:id')
+    .replace(/^\/v1\/members\/[^/]+\/approve$/, '/v1/members/:id/approve')
+    .replace(/^\/v1\/members\/[^/]+$/, '/v1/members/:id');
   return `${method} ${p}`;
 }
 

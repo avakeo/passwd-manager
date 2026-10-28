@@ -51,13 +51,57 @@ function kdfParams(v: unknown): string {
   return v;
 }
 
-function keyId(v: unknown): string {
+export function keyId(v: unknown): string {
   if (typeof v !== 'string' || !KEY_ID.test(v)) throw new HttpProblem(400);
   return v;
 }
 
+export const GRANT_FIELDS = ['vault_key_version', 'recipient_key_id', 'ephemeral_public_key', 'wrapped_key', 'signer_key_id', 'signature', 'format_version'];
+
+export type CheckedGrant = { vaultKeyVersion: number; recipientKeyId: string; ephemeralPublicKey: string; wrappedKey: string; signerKeyId: string; signature: string };
+
+// 署名付きのグラントの形を確かめる（長さとヘッダーも：DeepSeek #9）。中身は読まない
+export function grantShape(body: Record<string, unknown>): CheckedGrant {
+  if (!Number.isSafeInteger(body.vault_key_version) || Number(body.vault_key_version) < 1 || body.format_version !== FORMAT_V1) throw new HttpProblem(400);
+  const recipientKeyId = keyId(body.recipient_key_id);
+  const signerKeyId = keyId(body.signer_key_id);
+  const ephemeralPublicKey = publicKey(body.ephemeral_public_key);
+  const wrapped = bytes(body.wrapped_key);
+  if (wrapped.length !== GRANT_ENVELOPE_LENGTH || wrapped[0] !== FORMAT_V1 || wrapped[1] !== ALG_HPKE_BASE) throw new HttpProblem(400);
+  const sig = bytes(body.signature);
+  if (sig.length !== 2 + SIGNATURE_LENGTH || sig[0] !== FORMAT_V1 || sig[1] !== ALG_ECDSA_P256_SHA256) throw new HttpProblem(400);
+  return { vaultKeyVersion: Number(body.vault_key_version), recipientKeyId, ephemeralPublicKey, wrappedKey: body.wrapped_key as string, signerKeyId, signature: body.signature as string };
+}
+
+// サーバーもグラントの署名を確かめる（形だけ合わせた偽のグラントを置かせない：DeepSeek #2）。
+// 署名する中身は、暗号コアと同じ関数で組み立てる。使い捨て公開鍵が曲線上の点かも確かめる。違えば 400
+export async function verifyGrantSignature(
+  g: CheckedGrant,
+  signer: { memberId: string; ecdsaPublicKey: string },
+  recipient: { memberId: string; ecdhPublicKey: string },
+): Promise<void> {
+  const epk = fromBase64Url(g.ephemeralPublicKey);
+  try {
+    await importPublicKey(epk);
+  } catch {
+    throw new HttpProblem(400);
+  }
+  const message = grantSignedMessage({
+    signerMemberId: signer.memberId,
+    signerKeyId: g.signerKeyId,
+    vaultKeyVersion: g.vaultKeyVersion,
+    recipientMemberId: recipient.memberId,
+    recipientKeyId: g.recipientKeyId,
+    recipientPublicKeySha256: new Uint8Array(await crypto.subtle.digest('SHA-256', fromBase64Url(recipient.ecdhPublicKey))),
+    ephemeralPublicKey: epk,
+    wrappedKey: fromBase64Url(g.wrappedKey),
+  });
+  const verifyKey = await importSignPublicKey(fromBase64Url(signer.ecdsaPublicKey));
+  if (!(await verifySignature(verifyKey, fromBase64Url(g.signature).slice(2), message))) throw new HttpProblem(400);
+}
+
 // 確認と保存を1つのバッチにするときの、バッチの先頭の確認（0 なら制約違反でバッチ全体が巻き戻る：rotation_guard）
-function isGuardFailure(e: unknown): boolean {
+export function isGuardFailure(e: unknown): boolean {
   return e instanceof Error && /constraint/i.test(e.message);
 }
 
@@ -130,15 +174,12 @@ export function registerKeyRoutes(app: Hono<Env>): void {
     if (p.role !== 'admin') throw new HttpProblem(403);
     const now = Date.now();
     if (!hasRecentTotp(p, now)) throw new HttpProblem(403);
-    const body = await readJson(c.req.raw, ['vault_key_version', 'recipient_key_id', 'ephemeral_public_key', 'wrapped_key', 'signer_key_id', 'signature', 'format_version']);
-    if (body.vault_key_version !== 1 || body.format_version !== FORMAT_V1) throw new HttpProblem(400);
-    const recipient = keyId(body.recipient_key_id);
-    if (keyId(body.signer_key_id) !== recipient) throw new HttpProblem(400);
-    const epk = publicKey(body.ephemeral_public_key);
-    const wrapped = bytes(body.wrapped_key);
-    if (wrapped.length !== GRANT_ENVELOPE_LENGTH || wrapped[0] !== FORMAT_V1 || wrapped[1] !== ALG_HPKE_BASE) throw new HttpProblem(400);
-    const sig = bytes(body.signature);
-    if (sig.length !== 2 + SIGNATURE_LENGTH || sig[0] !== FORMAT_V1 || sig[1] !== ALG_ECDSA_P256_SHA256) throw new HttpProblem(400);
+    const body = await readJson(c.req.raw, GRANT_FIELDS);
+    const g = grantShape(body);
+    if (g.vaultKeyVersion !== 1) throw new HttpProblem(400);
+    const recipient = g.recipientKeyId;
+    if (g.signerKeyId !== recipient) throw new HttpProblem(400);
+    const epk = g.ephemeralPublicKey;
 
     const db = c.env.DB;
     // サーバーも署名を確かめる（形だけ合わせた偽のグラントで Vault を作らせ、正規の端末が開けないまま
@@ -151,25 +192,7 @@ export function registerKeyRoutes(app: Hono<Env>): void {
       .bind(recipient, p.memberId)
       .first<{ ecdh_public_key: string; ecdsa_public_key: string }>();
     if (!own) throw new HttpProblem(409); // 自分の有効な署名鍵付きの鍵ではない
-    const epkBytes = fromBase64Url(epk);
-    try {
-      await importPublicKey(epkBytes); // 曲線上の点か
-    } catch {
-      throw new HttpProblem(400);
-    }
-    const ownEcdh = fromBase64Url(own.ecdh_public_key);
-    const message = grantSignedMessage({
-      signerMemberId: p.memberId,
-      signerKeyId: recipient,
-      vaultKeyVersion: 1,
-      recipientMemberId: p.memberId,
-      recipientKeyId: recipient,
-      recipientPublicKeySha256: new Uint8Array(await crypto.subtle.digest('SHA-256', ownEcdh)),
-      ephemeralPublicKey: epkBytes,
-      wrappedKey: wrapped,
-    });
-    const verifyKey = await importSignPublicKey(fromBase64Url(own.ecdsa_public_key));
-    if (!(await verifySignature(verifyKey, sig.slice(2), message))) throw new HttpProblem(400);
+    await verifyGrantSignature(g, { memberId: p.memberId, ecdsaPublicKey: own.ecdsa_public_key }, { memberId: p.memberId, ecdhPublicKey: own.ecdh_public_key });
 
     try {
       await db.batch([
@@ -191,7 +214,7 @@ export function registerKeyRoutes(app: Hono<Env>): void {
             `INSERT INTO vault_key_grants (vault_key_version, recipient_key_id, ephemeral_public_key, wrapped_key, signer_key_id, signature, format_version, created_at)
              VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .bind(recipient, epk, body.wrapped_key as string, recipient, body.signature as string, FORMAT_V1, now),
+          .bind(recipient, epk, g.wrappedKey, recipient, g.signature, FORMAT_V1, now),
         db.prepare('DELETE FROM rotation_guard'),
         db.prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) VALUES (?, 'vault.init', 'vault', '1', ?)`).bind(p.memberId, now),
       ]);
