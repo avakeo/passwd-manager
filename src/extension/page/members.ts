@@ -15,6 +15,9 @@ const EXTRA_ERRORS: Record<string, string> = {
   STEP_UP_REQUIRED: '先に「設定とセキュリティ」の TOTP の再確認をしてください（管理操作は5分以内の確認が要ります）',
   CANNOT_REMOVE_SELF: '自分は削除できません',
   NOT_MEMBER: '管理者の照合はメンバーだけが行います',
+  ROTATION_CONFLICT: '途中でほかの人がアイテムを変えたか、メンバーが増減しました。何も変わっていないので、もう一度押してください',
+  UNREADABLE_ITEMS: '開けないアイテムがあるので止めました。書き換えると中身が失われるためです',
+  TOO_LARGE: 'アイテムが多すぎて、1回で送れる大きさ（1.5MB）を超えました',
 };
 
 function message(code: string | undefined): string {
@@ -145,6 +148,36 @@ export function rotationNotice(): HTMLElement {
     text: 'メンバーを削除しました。その人の端末には、今の世代の Vault 鍵が残っているおそれがあります。ローテーションをしてください。その人が見たパスワードは、実際のサービス側でも変えてください。',
     className: 'warn',
   });
+}
+
+// ローテーション（フェーズ4b）。新しい世代の Vault 鍵を作り、全アイテムを暗号化し直し、有効なメンバー全員分のグラントを作る
+export function rotationSection(onDone: () => void): HTMLElement {
+  const out = el('p', { className: 'note' });
+  const button = el('button', { text: 'ローテーションする', className: 'secondary' });
+  button.addEventListener('click', async () => {
+    if (!window.confirm('Vault 鍵を新しい世代にし、全アイテムを暗号化し直します。よろしいですか。')) return;
+    button.disabled = true;
+    out.textContent = '暗号化し直しています…';
+    out.className = 'muted';
+    const r = await send({ type: 'rotateVault' });
+    button.disabled = false;
+    if (!r.ok) {
+      out.textContent = message(r.error);
+      out.className = 'error';
+      return;
+    }
+    out.textContent = `世代 ${Number(r.vaultKeyVersion)} にしました（${Number(r.items)} 件を暗号化し直しました）。メンバーの画面にも、新しい世代を伝えてください。`;
+    out.className = 'note';
+    onDone();
+  });
+  return el(
+    'section',
+    {},
+    el('h2', { text: 'ローテーション' }),
+    el('p', { text: 'メンバーを削除した後や、Vault 鍵が漏れたおそれがあるときに行います。削除した人は、新しい世代の鍵を受け取れません。', className: 'muted' }),
+    button,
+    out,
+  );
 }
 
 // 監査ログ（新しい順に50件）
