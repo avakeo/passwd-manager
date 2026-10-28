@@ -312,3 +312,12 @@ select {
 .popup-item p:empty {
   display: none;
 }
+
+/* 照合のフィンガープリント。読み上げやすいように等幅で大きく、全桁を折り返して出す */
+.fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+  margin: 4px 0 8px;
+}

@@ -70,6 +70,11 @@ test('P-06 照合の画面：メンバーには管理者の署名鍵のフィン
   assert.equal(shown.fingerprint, await fingerprint(adminSign));
   assert.match(String(shown.fingerprint), /^\d{5}( \d{5}){5}$/, '6組30桁を省略しない（DeepSeek #13）');
   assert.equal(shown.vaultKeyVersion, 1);
+  // 相手が見比べる、自分の鍵のフィンガープリントも出す（メンバーは公開鍵、管理者は署名用公開鍵）
+  const memberPub0 = fromBase64Url(String(w.t.db.db.prepare('SELECT ecdh_public_key FROM member_keys WHERE member_id = ?').get(memberId)!.ecdh_public_key));
+  assert.equal(shown.ownFingerprint, await fingerprint(memberPub0));
+  const listed = await send(w, { type: 'listMembers' });
+  assert.equal(listed.signFingerprint, await fingerprint(adminSign));
   const { list, lastSeenGeneration } = await members(w);
   assert.equal(lastSeenGeneration, 1);
   const row = list.find((x) => x.id === memberId)!;

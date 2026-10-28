@@ -88,8 +88,11 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>) 
       const s = await readySession();
       const signer = await fetchSigner();
       const pinned = await trustFor(s.memberId).signerPins.get();
+      const me = await getMe();
+      const own = typeof me.key?.ecdh_public_key === 'string' ? await fingerprint(fromBase64Url(me.key.ecdh_public_key)) : null;
       return {
         ok: true,
+        ownFingerprint: own, // 管理者が承認の画面で見比べる、自分の公開鍵
         memberId: signer.memberId,
         keyId: signer.keyId,
         fingerprint: signer.fingerprint,
@@ -134,7 +137,10 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>) 
           self: x.id === s.memberId,
         });
       }
-      return { ok: true, members: out, currentVaultKeyVersion: current, lastSeenGeneration: (await trustFor(s.memberId).generations.get()) ?? null };
+      // 管理者なら、メンバーが照合の画面で見比べる自分の署名用公開鍵
+      const me = await getMe();
+      const sign = typeof me.key?.ecdsa_public_key === 'string' ? await fingerprint(fromBase64Url(me.key.ecdsa_public_key)) : null;
+      return { ok: true, members: out, signFingerprint: sign, currentVaultKeyVersion: current, lastSeenGeneration: (await trustFor(s.memberId).generations.get()) ?? null };
     },
 
     // 管理者が「一致」を押した。見せた鍵 ID とフィンガープリントが、サーバーの今の値と同じときだけ固定する
