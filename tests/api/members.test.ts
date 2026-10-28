@@ -128,6 +128,23 @@ test('P-03 グラントのない承認、署名の正しくないグラント、
   assert.equal((await t.request('POST', url, admin.token, good)).status, 409, '承認済み');
 });
 
+test('P-03 確かめてから保存するまでの間に、相手が承認済みになった・鍵を登録し直した・世代が変わったら、バッチの先頭で 409 にし、何も入れない', async () => {
+  for (const change of [
+    (t: Setup, id: string) => t.db.db.prepare(`UPDATE members SET status = 'active' WHERE id = ?`).run(id),
+    (t: Setup, id: string) => t.db.db.prepare(`UPDATE member_keys SET status = 'revoked' WHERE member_id = ?`).run(id),
+    (t: Setup) => t.db.db.prepare('UPDATE vault_meta SET current_vault_key_version = 2').run(),
+  ]) {
+    const { t, admin, c, forC } = await world();
+    const grant = await forC();
+    t.db.beforeBatch = async () => {
+      change(t, c.id);
+      t.db.beforeBatch = null;
+    };
+    assert.equal((await t.request('POST', `/v1/members/${c.id}/approve`, admin.token, grant)).status, 409);
+    assert.equal(grantCount(t, cKey.record.keyId), 0);
+  }
+});
+
 test('P-02 承認の後にメンバーが鍵を登録し直すと、承認待ちに戻り、新しい鍵宛てのグラントで承認し直すまで受け取れない', async () => {
   const { t, admin, c, forC } = await world();
   assert.equal((await t.request('POST', `/v1/members/${c.id}/approve`, admin.token, await forC())).status, 200);
