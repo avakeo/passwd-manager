@@ -292,7 +292,7 @@ export function passcodeSection(onDone: () => void): HTMLElement {
       return;
     }
     const r = await send({ type: 'setupQuickUnlock', passcode: a });
-    out.textContent = r.ok ? 'パスコードを決めました。ブラウザを閉じる、ロックする、15分放置する、5回間違えると消えます。' : errorText(r.error);
+    out.textContent = r.ok ? 'パスコードを決めました。ブラウザを閉じる、ロックする、45分放置する、5回間違えると消えます。' : errorText(r.error);
     out.className = r.ok ? 'note' : 'error';
     if (r.ok) onDone();
   });

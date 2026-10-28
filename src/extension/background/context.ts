@@ -11,7 +11,7 @@ import type { MeKey } from './api-shapes.ts';
 import type { Bytes } from '../../crypto/bytes.ts';
 import { openTrust, type GrantTrust, type TrustStorage } from '../../crypto/signer.ts';
 
-export const IDLE_LOCK_MS = 15 * 60 * 1000;
+export const IDLE_LOCK_MS = 45 * 60 * 1000; // 2026-10-29 に15分から延ばした（仕様書「拡張機能の構成」）
 export const LAST_ACTIVITY_KEY = 'teampw/v1/last-activity';
 // ロックで消す、ロック解除のための保存（2b のクイックロック解除が使う）
 export const UNLOCK_KEY_PREFIX = 'teampw/v1/unlock|';

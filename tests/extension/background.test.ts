@@ -180,31 +180,35 @@ test('E-14 Service Worker が止まると鍵が消えてロック状態から始
   assert.deepEqual([ok.ok, ok.vault], [true, 'ready'], JSON.stringify(ok));
 });
 
-test('放置のロック：15分を過ぎてから来たメッセージは、処理の前にロックする。15分以内なら続く', async () => {
+test('放置のロックは45分（2026-10-29 に15分から延ばした）', () => {
+  assert.equal(IDLE_LOCK_MS, 45 * MIN);
+});
+
+test('放置のロック：45分を過ぎてから来たメッセージは、処理の前にロックする。45分以内なら続く', async () => {
   const w = world();
   await adminReady(w);
   at(IDLE_LOCK_MS - 1000);
-  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, false, '15分以内');
-  // 最後の操作から15分と1ミリ秒
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, false, '45分以内');
+  // 最後の操作から45分と1ミリ秒
   at(IDLE_LOCK_MS - 1000 + IDLE_LOCK_MS + 1);
   const status = await send(w, { type: 'status' }, POPUP);
   assert.deepEqual([status.locked, status.vault], [true, 'locked']);
   assert.equal((await send(w, { type: 'initVault' })).error, 'LOCKED');
 });
 
-test('DeepSeek #4 status のような確認だけのメッセージを送り続けても、利用者の操作がなければ15分でロックされる', async () => {
+test('DeepSeek #4 status のような確認だけのメッセージを送り続けても、利用者の操作がなければ45分でロックされる', async () => {
   const w = world();
   await adminReady(w);
-  // 15分より少し短い間隔で、60分まで status だけを送り続ける（同期のポーリングの代わり）
+  // 45分より少し短い間隔で、180分まで status だけを送り続ける（同期のポーリングの代わり）
   let lockedAt: number | null = null;
-  for (let ms = IDLE_LOCK_MS - 1000; ms <= 60 * MIN; ms += IDLE_LOCK_MS - 1000) {
+  for (let ms = IDLE_LOCK_MS - 1000; ms <= 4 * IDLE_LOCK_MS; ms += IDLE_LOCK_MS - 1000) {
     at(ms);
     if ((await send(w, { type: 'status' }, POPUP)).locked === true) {
       lockedAt = ms;
       break;
     }
   }
-  assert.equal(lockedAt, 2 * (IDLE_LOCK_MS - 1000), '最初の操作（最初の Vault）から15分を過ぎた最初の status でロック');
+  assert.equal(lockedAt, 2 * (IDLE_LOCK_MS - 1000), '最初の操作（最初の Vault）から45分を過ぎた最初の status でロック');
   assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
 });
 
@@ -214,24 +218,24 @@ test('DeepSeek #4 画面を開く（opened）、ロック解除などの利用�
   at(IDLE_LOCK_MS - 1000);
   assert.equal((await send(w, { type: 'opened' }, POPUP)).ok, true);
   at(2 * (IDLE_LOCK_MS - 1000));
-  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, false, '画面を開いてから15分以内');
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, false, '画面を開いてから45分以内');
   at(2 * (IDLE_LOCK_MS - 1000) + IDLE_LOCK_MS);
   assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
 });
 
-test('放置のロック：Service Worker が起きたときにも確かめ、15分を過ぎていればロックの後始末（解除用の保存を消す）をする', async () => {
+test('放置のロック：Service Worker が起きたときにも確かめ、45分を過ぎていればロックの後始末（解除用の保存を消す）をする', async () => {
   const w = world();
   await adminReady(w);
   // 2b のクイックロック解除の保存の場所（ロックで消すもの）を置いておく
   await w.chrome.storage.session.set({ 'teampw/v1/unlock|quick': 'x' });
-  at(10 * MIN);
+  at(30 * MIN);
   w.bg = newBackground(w);
   await w.bg.onStartup();
-  assert.equal(w.chrome.storage.session.values.has('teampw/v1/unlock|quick'), true, '15分以内なら消さない');
-  at(16 * MIN);
+  assert.equal(w.chrome.storage.session.values.has('teampw/v1/unlock|quick'), true, '45分以内なら消さない');
+  at(46 * MIN);
   w.bg = newBackground(w);
   await w.bg.onStartup();
-  assert.equal(w.chrome.storage.session.values.has('teampw/v1/unlock|quick'), false, '15分を過ぎたら消す');
+  assert.equal(w.chrome.storage.session.values.has('teampw/v1/unlock|quick'), false, '45分を過ぎたら消す');
   assert.equal((await send(w, { type: 'status' }, POPUP)).loggedIn, true, 'ログインは続く');
 });
 
