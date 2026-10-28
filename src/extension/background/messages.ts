@@ -44,6 +44,9 @@ export const MESSAGE_SCHEMAS = {
   getItem: [{ id: ITEM_ID }],
   saveItem: [{ item: { kind: 'item' } }, { id: ITEM_ID, revision: REVISION, item: { kind: 'item' } }],
   deleteItem: [{ id: ITEM_ID, revision: REVISION }],
+  // 自動入力とコピー（フェーズ3）。autofill はポップアップからだけ受ける（autofill.ts で送り主を確かめる）
+  autofill: [{ id: ITEM_ID, tabId: { kind: 'int', min: 0 } }],
+  copyToClipboard: [{ id: ITEM_ID, field: { kind: 'string', min: 8, max: 8, pattern: /^password$/ } }, { id: ITEM_ID, customIndex: { kind: 'int', min: 0 } }],
 } satisfies Record<string, Record<string, Field>[]>;
 
 export type MessageType = keyof typeof MESSAGE_SCHEMAS;
@@ -68,6 +71,14 @@ export function acceptedSender(runtime: { id: string; getURL(path: string): stri
     const allowed = new URL(runtime.getURL(page));
     return where === `${allowed.protocol}//${allowed.host}${allowed.pathname}`;
   });
+}
+
+// ポップアップのページから来たか（自動入力はポップアップの操作でだけ始める：E-07・E-08）
+export function fromPopup(runtime: { id: string; getURL(path: string): string }, sender: MessageSender): boolean {
+  if (!acceptedSender(runtime, sender)) return false;
+  const url = new URL(sender.url!);
+  const popup = new URL(runtime.getURL(POPUP_PAGE));
+  return url.host === popup.host && url.pathname === popup.pathname;
 }
 
 function fieldOk(field: Field, value: unknown): boolean {

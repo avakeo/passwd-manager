@@ -82,26 +82,78 @@ function vaultText(state: string): string {
   }
 }
 
+// 今のタブ（ポップアップを開いたことで activeTab の一時権限があるので、URL を読める）
+async function activeTab(): Promise<{ id: number; origin: string | null } | null> {
+  const tabs = (globalThis as unknown as { chrome: { tabs: { query(q: object): Promise<{ id?: number; url?: string }[]> } } }).chrome.tabs;
+  const [tab] = await tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  if (!tab || typeof tab.id !== 'number') return null;
+  return { id: tab.id, origin: httpsOrigin(tab.url ?? '') };
+}
+
+function httpsOrigin(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+type Summary = { id: string; type: 'login' | 'note' | null; title: string; username?: string; urls?: string[]; unreadable: boolean };
+
+// 1件の行。ログインには「入力」（このページに一致するときだけ）と「コピー」を付ける。結果は行の下に出す
+function itemRow(i: Summary, tabId: number | null, matches: boolean): HTMLElement {
+  const label = el('div', { className: 'item-label' }, el('span', { text: i.title || '（タイトルなし）', className: 'item-title' }));
+  if (i.username) label.append(el('span', { text: i.username, className: 'muted' }));
+  const out = el('p', { className: 'muted' });
+  const buttons = el('div', { className: 'row' });
+  if (i.type === 'login' && matches && tabId !== null) {
+    const fill = el('button', { text: '入力' });
+    fill.addEventListener('click', async () => {
+      const r = await send({ type: 'autofill', id: i.id, tabId });
+      if (r.ok && Number(r.filled) > 0) return window.close();
+      out.textContent = r.ok ? '入れる欄が見つかりませんでした。' : errorText(r.error);
+      out.className = 'error';
+    });
+    buttons.append(fill);
+  }
+  if (i.type === 'login') {
+    const copy = el('button', { text: 'パスワードをコピー', className: 'secondary' });
+    copy.addEventListener('click', async () => {
+      const r = await send({ type: 'copyToClipboard', id: i.id, field: 'password' });
+      out.textContent = r.ok ? 'コピーしました。1分後に消します（Windows のクリップボードの履歴には残ります）。' : errorText(r.error);
+      out.className = r.ok ? 'muted' : 'error';
+    });
+    buttons.append(copy);
+  }
+  return el('li', {}, el('div', { className: 'row-between' }, label, buttons), out);
+}
+
 // 一覧（タイトルとユーザー名だけ。パスワードはポップアップに渡さない）。同期と一覧は放置のロックを延ばさない
 async function renderList(): Promise<void> {
   const synced = await send({ type: 'sync' });
   if (!synced.ok && synced.error === 'ROLLBACK_DETECTED') root.append(message('サーバーが古い状態を返しました。同期を止めています。', 'error'));
   const r = await send({ type: 'listItems' });
   if (!r.ok) return;
+  const tab = await activeTab();
+  const items = (r.items as Summary[]).filter((i) => !i.unreadable);
+  const matching = tab?.origin ? items.filter((i) => (i.urls ?? []).some((u) => httpsOrigin(u) === tab.origin)) : [];
+  if (matching.length > 0) {
+    root.append(el('h2', { text: 'このページのアイテム' }), el('ul', { className: 'item-list' }, ...matching.map((i) => itemRow(i, tab!.id, true))));
+  }
   const search = el('input', { type: 'search', placeholder: '検索' });
-  const list = el('ul');
-  const items = r.items as { title: string; username?: string; unreadable: boolean }[];
+  const list = el('ul', { className: 'item-list' });
   const draw = () => {
     const q = search.value.trim().toLowerCase();
     list.replaceChildren(
       ...items
-        .filter((i) => !i.unreadable && (q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q)))
-        .map((i) => el('li', {}, el('span', { text: i.title }), el('span', { text: i.username ? `  ${i.username}` : '', className: 'muted' }))),
+        .filter((i) => q === '' || i.title.toLowerCase().includes(q) || (i.username ?? '').toLowerCase().includes(q))
+        .map((i) => itemRow(i, tab?.id ?? null, false)),
     );
   };
   search.addEventListener('input', draw);
   draw();
-  root.append(search, list);
+  root.append(el('h2', { text: 'すべてのアイテム' }), search, list);
 }
 
 // ポップアップを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない

@@ -156,6 +156,19 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
   }
 
   // revision は書き込んだ後のリビジョン（作成は1、更新は元にしたリビジョン + 1）
+  // 1件を開く。復号している間にロックされたら、平文を返さない（2b Codex #2、DeepSeek #4）。自動入力とコピーも使う
+  async function readItem(id: string): Promise<{ item: ClientItem; revision: number }> {
+    const epoch = state.lockEpoch;
+    const memberId = await vaultMember();
+    await loadCache(memberId);
+    const e = state.index.get(id);
+    if (!e) throw new Fail('NOT_FOUND');
+    const item = await openEntry(id, e).catch(() => null);
+    if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+    if (item === null) throw new Fail('UNREADABLE');
+    return { item, revision: e.revision };
+  }
+
   async function encryptFor(id: string, revision: number, item: ClientItem): Promise<string> {
     return toBase64Url(await encryptItem(state.vaultKey!, { itemId: id, vaultKeyVersion: state.vaultVersion!, revision }, item as unknown as ItemContent));
   }
@@ -174,16 +187,8 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
 
     // 1件を開いたときだけ、中身（パスワードを含む）を返す
     async getItem(m) {
-      const epoch = state.lockEpoch;
-      const memberId = await vaultMember();
-      await loadCache(memberId);
-      const e = state.index.get(String(m.id));
-      if (!e) throw new Fail('NOT_FOUND');
-      const item = await openEntry(String(m.id), e).catch(() => null);
-      // 復号している間にロックされたら、平文を返さない（2b Codex #2、DeepSeek #4）
-      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
-      if (item === null) throw new Fail('UNREADABLE');
-      return { ok: true, item, revision: e.revision };
+      const { item, revision } = await readItem(String(m.id));
+      return { ok: true, item, revision };
     },
 
     async saveItem(m) {
@@ -254,5 +259,5 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     },
   } satisfies Record<string, Handler>;
 
-  return { handlers };
+  return { handlers, readItem };
 }

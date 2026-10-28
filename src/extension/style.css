@@ -265,3 +265,31 @@ input.switch:checked {
 input.switch:checked::before {
   left: 18px;
 }
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+body.popup .item-list li {
+  display: block;
+}
+
+select {
+  font: inherit;
+  margin: 4px 4px 4px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  flex: none;
+}
+
+.custom-field {
+  border-left: 3px solid var(--line);
+  padding-left: 8px;
+  margin: 8px 0;
+}

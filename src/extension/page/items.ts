@@ -49,8 +49,85 @@ function labeled(label: string, field: HTMLElement): HTMLElement {
   return el('label', { className: 'field' }, el('span', { text: label, className: 'muted' }), field);
 }
 
-// 編集のフォーム。read() で、画面の値からアイテムを組み立てる（形の確かめは Service Worker の validateItem）
-function editorFields(item: Item): { node: HTMLElement; read: () => Item } {
+const MAX_CUSTOM_FIELDS = 20; // src/client/item-data.ts と同じ上限
+const CUSTOM_TYPES: { value: CustomField['type']; label: string }[] = [
+  { value: 'text', label: 'テキスト' },
+  { value: 'hidden', label: '非表示' },
+  { value: 'date', label: '日付' },
+];
+
+// コピーのボタン。値は Service Worker がアイテムから取り出し、オフスクリーンドキュメントで書いて1分後に消す（E-10・E-12）。
+// 保存済みのアイテムにだけ出す。コピーするのは保存した値（画面で書き換えた、まだ保存していない値ではない）
+function copyButton(id: string, target: { field: 'password' } | { customIndex: number }, out: HTMLElement): HTMLElement {
+  const button = el('button', { text: 'コピー', className: 'secondary', type: 'button' });
+  button.addEventListener('click', async () => {
+    const r = await send({ type: 'copyToClipboard', id, ...target });
+    out.textContent = r.ok ? 'コピーしました。1分後に消します（Windows のクリップボードの履歴には残ります）。' : errorText(r.error);
+    out.className = r.ok ? 'muted' : 'error';
+  });
+  return button;
+}
+
+// カスタム項目の編集（テキスト・非表示・日付。20項目まで）。カスタム項目は自動入力に使わず、コピーだけ
+function customFieldsEditor(fields: CustomField[], id: string | null, out: HTMLElement): { node: HTMLElement; read: () => CustomField[] } {
+  type Row = { node: HTMLElement; read: () => CustomField };
+  const rows: Row[] = [];
+  const list = el('div');
+  const add = el('button', { text: '項目を足す', className: 'secondary', type: 'button' });
+
+  function makeRow(field: CustomField, savedIndex: number | null): Row {
+    const type = el('select');
+    for (const t of CUSTOM_TYPES) {
+      const option = el('option', { text: t.label });
+      option.value = t.value;
+      type.append(option);
+    }
+    type.value = field.type;
+    const label = el('input', { type: 'text', value: field.label, placeholder: '項目の名前' });
+    const slot = el('div');
+    let readValue: () => string = () => field.value;
+    const drawValue = (value: string) => {
+      if (type.value === 'hidden') {
+        const secret = secretInput(value);
+        readValue = () => readSecret(secret);
+        slot.replaceChildren(secret);
+      } else {
+        const input = el('input', { type: type.value === 'date' ? 'date' : 'text', value, autocomplete: 'off' });
+        readValue = () => input.value;
+        slot.replaceChildren(input);
+      }
+    };
+    drawValue(field.value);
+    type.addEventListener('change', () => drawValue(readValue()));
+    const remove = el('button', { text: '消す', className: 'secondary', type: 'button' });
+    const buttons = el('div', { className: 'row' }, remove);
+    if (id !== null && savedIndex !== null) buttons.append(copyButton(id, { customIndex: savedIndex }, out));
+    const node = el('div', { className: 'custom-field' }, el('div', { className: 'row' }, type, label), slot, buttons);
+    const row: Row = { node, read: () => ({ type: type.value as CustomField['type'], label: label.value, value: readValue() }) };
+    remove.addEventListener('click', () => {
+      rows.splice(rows.indexOf(row), 1);
+      node.remove();
+      add.disabled = rows.length >= MAX_CUSTOM_FIELDS;
+    });
+    return row;
+  }
+
+  fields.forEach((f, i) => rows.push(makeRow(f, i)));
+  list.append(...rows.map((r) => r.node));
+  add.disabled = rows.length >= MAX_CUSTOM_FIELDS;
+  add.addEventListener('click', () => {
+    if (rows.length >= MAX_CUSTOM_FIELDS) return;
+    const row = makeRow({ type: 'text', label: '', value: '' }, null);
+    rows.push(row);
+    list.append(row.node);
+    add.disabled = rows.length >= MAX_CUSTOM_FIELDS;
+  });
+  return { node: el('div', {}, el('span', { text: 'カスタム項目（自動入力には使わない）', className: 'muted' }), list, add), read: () => rows.map((r) => r.read()) };
+}
+
+// 編集のフォーム。read() で、画面の値からアイテムを組み立てる（形の確かめは Service Worker の validateItem）。
+// id があれば（保存済みなら）、パスワードとカスタム項目にコピーのボタンを付ける
+function editorFields(item: Item, id: string | null = null): { node: HTMLElement; read: () => Item } {
   const title = el('input', { type: 'text', value: item.title });
   if (item.type === 'note') {
     const body = el('textarea');
@@ -63,10 +140,11 @@ function editorFields(item: Item): { node: HTMLElement; read: () => Item } {
   urls.value = item.urls.join('\n');
   const notes = el('textarea');
   notes.value = item.notes;
-  // カスタム項目の編集はフェーズ3。ここでは中身を保ったまま送り返す（非表示の項目は伏せ字で見せる）
-  const custom = el('div', {}, ...item.customFields.map((f) => labeled(f.label, f.type === 'hidden' ? secretInput(f.value) : el('input', { type: 'text', value: f.value, disabled: true }))));
+  const copyOut = el('p', { className: 'muted' });
+  if (id !== null) password.append(el('div', { className: 'row' }, copyButton(id, { field: 'password' }, copyOut)));
+  const custom = customFieldsEditor(item.customFields, id, copyOut);
   return {
-    node: el('div', {}, labeled('タイトル', title), labeled('ユーザー名', username), labeled('パスワード', password), labeled('URL（1行に1つ、https だけ）', urls), labeled('メモ', notes), custom),
+    node: el('div', {}, labeled('タイトル', title), labeled('ユーザー名', username), labeled('パスワード', password), labeled('URL（1行に1つ、https だけ）', urls), labeled('メモ', notes), custom.node, copyOut),
     read: () => ({
       type: 'login',
       title: title.value,
@@ -74,7 +152,7 @@ function editorFields(item: Item): { node: HTMLElement; read: () => Item } {
       password: readSecret(password),
       urls: urls.value.split('\n').map((u) => u.trim()).filter((u) => u !== ''),
       notes: notes.value,
-      customFields: item.customFields,
+      customFields: custom.read(),
     }),
   };
 }
@@ -86,7 +164,7 @@ export function blankItem(type: 'login' | 'note'): Item {
 // 1件の編集（id がなければ新しく作る）。409 のときは、今の版と自分の入力を並べて選ばせる
 export function editorSection(item: Item, id: string | null, revision: number | null, done: () => void): HTMLElement {
   const out = el('p', { className: 'note' });
-  const form = editorFields(item);
+  const form = editorFields(item, id);
   const area = el('div', {}, form.node);
   const save = el('button', { text: id ? '保存' : '作成' });
   save.addEventListener('click', async () => {

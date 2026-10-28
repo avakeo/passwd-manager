@@ -6,6 +6,6 @@
   "minimum_chrome_version": "120",
   "background": { "service_worker": "extension/background/service-worker.js", "type": "module" },
   "action": { "default_popup": "extension/popup/popup.html", "default_title": "teampw" },
-  "permissions": ["storage", "identity"],
+  "permissions": ["storage", "identity", "activeTab", "scripting", "offscreen", "clipboardWrite", "clipboardRead"],
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" }
 }
