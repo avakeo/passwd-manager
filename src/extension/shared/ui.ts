@@ -19,9 +19,18 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props =
   return node;
 }
 
-export function send(message: Record<string, unknown>): Promise<Reply> {
+// ロックされていると分かったときに呼ぶ（全画面ページが、ロック解除だけの画面に描き直すのに使う）
+let lockedHandler: (() => void) | null = null;
+
+export function onLocked(handler: () => void): void {
+  lockedHandler = handler;
+}
+
+export async function send(message: Record<string, unknown>): Promise<Reply> {
   const runtime = (globalThis as unknown as { chrome: { runtime: { sendMessage(m: unknown): Promise<Reply> } } }).chrome.runtime;
-  return runtime.sendMessage(message);
+  const reply = await runtime.sendMessage(message);
+  if (reply?.error === 'LOCKED' && lockedHandler) queueMicrotask(lockedHandler);
+  return reply;
 }
 
 export function pageUrl(path: string): string {

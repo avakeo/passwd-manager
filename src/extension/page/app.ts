@@ -3,7 +3,7 @@
 // アイテムの一覧・編集は 2b。鍵は持たない。表示はすべて文字として出す（shared/ui.ts）。
 
 import { loginTotpForm, unlockForms } from '../shared/forms.ts';
-import { el, errorText, recoveryNotice, send } from '../shared/ui.ts';
+import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
 
@@ -152,8 +152,24 @@ function loginSection(): HTMLElement {
   return section('ログイン', 'login', button, out);
 }
 
+// 今ロック解除だけの画面を出しているか（タブに戻ったときに、描き直すかを決める）
+let showingLock = false;
+
+// ロック中の画面：マスターパスワード（使えるならパスコードも）の欄と、ログアウトだけ
+function lockScreen(quickUnlockAvailable: boolean): HTMLElement {
+  const logout = el('button', { text: 'ログアウト', className: 'secondary' });
+  logout.addEventListener('click', async () => {
+    await send({ type: 'logout' });
+    await render();
+  });
+  const s = section('ロック解除', 'unlock', unlockForms(quickUnlockAvailable, render), el('div', { className: 'row' }, logout));
+  queueMicrotask(() => s.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')?.focus());
+  return s;
+}
+
 async function render(notice?: string): Promise<void> {
   const s = await send({ type: 'status' });
+  showingLock = false;
   root.replaceChildren(el('h1', { text: 'teampw' }));
   if (notice) root.append(el('p', { text: notice, className: 'error' }));
   if (!s.ok) {
@@ -170,6 +186,12 @@ async function render(notice?: string): Promise<void> {
   }
   if (s.totpSetupRequired) {
     root.append(totpSection(false));
+    return;
+  }
+  // 鍵があってロックされているときは、ロック解除の欄だけを出す（一覧や設定は解除してから）
+  if (s.locked && s.hasKey === true) {
+    showingLock = true;
+    root.append(lockScreen(s.quickUnlockAvailable === true));
     return;
   }
   const recovery = recoveryNotice(s.recoveryCodesRemaining);
@@ -215,6 +237,17 @@ async function render(notice?: string): Promise<void> {
   if (target && settings.contains(target)) settings.open = true;
   if (target) target.scrollIntoView();
 }
+
+// 操作の途中でロックされていると分かったら（放置のロックなど）、ロック解除だけの画面に描き直す
+onLocked(() => {
+  if (!showingLock) void render();
+});
+// タブに戻ったときも確かめる。status は放置の時刻を新しくしない
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || showingLock) return;
+  const s = await send({ type: 'status' });
+  if (s.ok && s.locked && s.hasKey === true) await render();
+});
 
 // 全画面ページを開いたのは利用者の操作（放置の時刻を新しくする）。status は新しくしない
 void send({ type: 'opened' }).then(() => render());
