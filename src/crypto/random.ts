@@ -12,6 +12,6 @@ export function newToken(): string {
 }
 
 // アイテムIDと鍵ID。乱数16バイト（128ビット）を base64url（22文字）にして接頭辞を付ける。
-export function newId(prefix: 'item' | 'key' | 'member' | 'session' | 'challenge'): string {
+export function newId(prefix: 'item' | 'key' | 'member' | 'session' | 'challenge' | 'device'): string {
   return `${prefix}_${toBase64Url(randomBytes(16))}`;
 }

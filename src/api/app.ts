@@ -8,6 +8,7 @@ import { cors } from 'hono/cors';
 import { authenticate, authorize, routeKey } from './auth.ts';
 import { recoveryCodesRemaining, registerAuthRoutes } from './auth-routes.ts';
 import { registerKeyRoutes } from './key-routes.ts';
+import { registerDeviceRoutes } from './device-routes.ts';
 import type { D1Database } from './d1.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
@@ -55,7 +56,7 @@ function itemIdParam(id: string): string {
 export function createApp() {
   const app = new Hono<Env>();
 
-  app.onError((err) => (err instanceof HttpProblem ? problem(err.status) : problem(500)));
+  app.onError((err) => (err instanceof HttpProblem ? problem(err.status, err.extra) : problem(500)));
   app.notFound(() => problem(404));
 
   app.use(
@@ -74,7 +75,10 @@ export function createApp() {
   app.use('/v1/*', async (c, next) => {
     const key = routeKey(c.req.method, c.req.path);
     const isPublic =
-      key === 'POST /v1/auth/discord' || key === 'POST /v1/auth/refresh' || (key === 'POST /v1/auth/totp' && c.req.header('Authorization') === undefined);
+      key === 'POST /v1/auth/discord' ||
+      key === 'POST /v1/auth/refresh' ||
+      key === 'POST /v1/auth/resume' ||
+      (key === 'POST /v1/auth/totp' && c.req.header('Authorization') === undefined);
     if (!isPublic) {
       const p = await authenticate(c.env.DB, c.req.header('Authorization'));
       authorize(p, c.req.method, c.req.path);
@@ -85,6 +89,7 @@ export function createApp() {
 
   registerAuthRoutes(app);
   registerKeyRoutes(app);
+  registerDeviceRoutes(app);
 
   // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
   // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。

@@ -59,6 +59,14 @@ export const ROWS: Row[] = [
     expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 403),
   },
   {
+    // この端末を覚える（2026-10-29 追記）。承認待ちでも使える。Web 用は読み取りだけなので 403
+    name: 'POST /v1/me/devices',
+    method: 'POST',
+    path: () => '/v1/me/devices',
+    body: () => ({ pin_proof: 'A'.repeat(43) }),
+    expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 403),
+  },
+  {
     // 登録済みの人は作り直し（今のコードを付ける）
     name: 'POST /v1/me/totp（登録、登録済みなら作り直し）',
     method: 'POST',
@@ -125,6 +133,9 @@ test('Z（表） 公開の入口：ログイン・更新・TOTP の一時トー�
   assert.equal((await t.request('POST', '/v1/auth/refresh', undefined, { refresh_token: 1 })).status, 400);
   assert.equal((await t.request('POST', '/v1/auth/totp', undefined, { challenge_token: 'A'.repeat(43), code: '000000' })).status, 401);
   assert.equal((await t.request('POST', '/v1/auth/totp', undefined, { challenge_token: 'A'.repeat(43), code: '000000', extra: 1 })).status, 400);
+  // この端末を覚えた後の復帰（2026-10-29 追記）。知らない端末のトークンは 403、形の違う値は 400
+  assert.equal((await t.request('POST', '/v1/auth/resume', undefined, { device_token: 'A'.repeat(43), pin_proof: 'A'.repeat(43) })).status, 403);
+  assert.equal((await t.request('POST', '/v1/auth/resume', undefined, { device_token: 'A'.repeat(43) })).status, 400);
 });
 
 // 1マスを1つのテストにする（結果の一覧で、マスごとに成功・失敗が分かる）
