@@ -2,7 +2,7 @@
 // 2026-10-27 から、ログインとロック解除もここでできる（ポップアップは Discord の窓が開くと閉じ、ログインの結果を見せられないため）。
 // アイテムの一覧・編集は 2b。鍵は持たない。表示はすべて文字として出す（shared/ui.ts）。
 
-import { loginTotpForm, unlockForms } from '../shared/forms.ts';
+import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
@@ -141,15 +141,54 @@ async function sessionsSection(): Promise<HTMLElement> {
   return section('セッション', 'sessions', list, out);
 }
 
-// ログイン。Discord の窓を閉じても、このページは残るので、結果をここに出せる
-function loginSection(): HTMLElement {
+// ログイン。Discord の窓を閉じても、このページは残るので、結果をここに出せる。覚えた端末なら、パスコードの欄も出す
+function loginSection(deviceResumeAvailable: boolean): HTMLElement {
   const out = result();
-  const button = el('button', { text: 'Discord でログイン' });
+  const button = el('button', { text: 'Discord でログイン', className: deviceResumeAvailable ? 'secondary' : '' });
   button.addEventListener('click', async () => {
     const r = await send({ type: 'login', deviceLabel: 'Chrome' });
     await render(r.ok ? undefined : errorText(r.error));
   });
-  return section('ログイン', 'login', button, out);
+  return deviceResumeAvailable ? section('ログイン', 'login', deviceResumeForm(render), button, out) : section('ログイン', 'login', button, out);
+}
+
+// この端末を覚える（2026-10-29 追記）。ログインから7日まで、ブラウザを開き直しても4桁のパスコードで戻れる
+function rememberSection(remembered: boolean): HTMLElement {
+  const out = result();
+  if (remembered) {
+    const forget = el('button', { text: 'この端末を忘れる', className: 'secondary' });
+    forget.addEventListener('click', async () => {
+      await send({ type: 'forgetDevice' });
+      await render();
+    });
+    return section('この端末を覚える', 'remember', el('p', { text: 'この端末を覚えています。ブラウザを開き直したら、4桁のパスコードで戻れます（ログインから7日まで）。', className: 'muted' }), forget, out);
+  }
+  const form = el('form');
+  const p1 = el('input', { type: 'password', placeholder: '4桁の数字', autocomplete: 'off' });
+  const p2 = el('input', { type: 'password', placeholder: 'もう一度', autocomplete: 'off' });
+  form.append(p1, p2, el('button', { text: '覚える' }));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [a, b] = [p1.value, p2.value];
+    p1.value = '';
+    p2.value = '';
+    if (a !== b) {
+      out.textContent = '2回の入力が違います';
+      out.className = 'error';
+      return;
+    }
+    const r = await send({ type: 'rememberDevice', pin: a });
+    if (r.ok) return render();
+    out.textContent = r.error === 'STEP_UP_REQUIRED' ? 'ログインから5分を過ぎました。「設定とセキュリティ」の TOTP の再確認をしてから、もう一度押してください。' : errorText(r.error);
+    out.className = 'error';
+  });
+  return section(
+    'この端末を覚える',
+    'remember',
+    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（5分以内）に決めてください。', className: 'muted' }),
+    form,
+    out,
+  );
 }
 
 // ロック解除を保つ（2026-10-29 追記）。オンにするのはマスターパスワードで解除した状態からだけ
@@ -205,7 +244,7 @@ async function render(notice?: string): Promise<void> {
     return;
   }
   if (!s.loggedIn) {
-    root.append(loginSection());
+    root.append(loginSection(s.deviceResumeAvailable === true));
     return;
   }
   if (s.totpSetupRequired) {
@@ -226,6 +265,8 @@ async function render(notice?: string): Promise<void> {
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
   if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
+  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の5分以内に決めるため）。覚えた後は設定の中に置く
+  if (s.deviceRemembered === false) root.append(rememberSection(false));
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
     const slot = el('div');
@@ -242,6 +283,7 @@ async function render(notice?: string): Promise<void> {
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
+  if (s.deviceRemembered === true) settings.append(rememberSection(true));
   if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   settings.append(stepUpSection(), await sessionsSection(), totpSection(true));

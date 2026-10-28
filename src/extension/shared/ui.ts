@@ -64,6 +64,8 @@ const ERRORS: Record<string, string> = {
   TOO_LARGE: 'アイテムが大きすぎます',
   VAULT_NOT_READY: 'まだ Vault を開けていません',
   MEMBER_MISMATCH: 'サーバーの応答が、ログインした人と食い違っています',
+  DEVICE_FORGOTTEN: 'この端末を忘れました（3回間違えた、ログアウトした、または7日たった）。Discord でログインしてください',
+  NO_DEVICE: 'この端末は覚えていません。Discord でログインしてください',
 };
 
 export function errorText(code: string | undefined): string {
