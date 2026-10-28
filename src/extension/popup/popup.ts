@@ -126,7 +126,8 @@ function itemRow(i: Summary, tabId: number | null, matches: boolean): HTMLElemen
     });
     buttons.append(copy);
   }
-  return el('li', {}, el('div', { className: 'row-between' }, label, buttons), out);
+  // ポップアップは幅が狭いので、名前を上の1行に、ボタンをその下に並べる
+  return el('li', { className: 'popup-item' }, label, buttons, out);
 }
 
 // 一覧（タイトルとユーザー名だけ。パスワードはポップアップに渡さない）。同期と一覧は放置のロックを延ばさない
