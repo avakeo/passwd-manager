@@ -312,11 +312,11 @@ test('Codex #1 更新の途中で別の人がログインしても、遅れて�
   assert.equal(stored.memberId, otherId, '後からログインした人のトークンのまま');
 });
 
-// ロック解除の途中（鍵を開けた後、自分宛てのグラントを取りに行っている間）に、ロック・ログアウト・15分の経過が起きる
+// ロック解除の途中（鍵を開けた後、自分宛てのグラントを取りに行っている間）に、ロック・ログアウト・45分の経過が起きる
 for (const [name, interrupt] of [
   ['ロック', async (w: World) => void (await send(w, { type: 'lock' }, POPUP))],
   ['ログアウト', async (w: World) => void (await send(w, { type: 'logout' }, POPUP))],
-  ['15分の経過', async () => at(16 * MIN)],
+  ['45分の経過', async () => at(IDLE_LOCK_MS + MIN)],
 ] as const) {
   test(`Codex #3 ロック解除の途中で${name}が起きても、終わった後に鍵がメモリに残らない`, async () => {
     const w = world();
