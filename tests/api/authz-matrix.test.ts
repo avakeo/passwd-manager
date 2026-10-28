@@ -94,6 +94,13 @@ export const ROWS: Row[] = [
     expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
   },
   {
+    name: 'POST /v1/items/import',
+    method: 'POST',
+    path: () => '/v1/items/import',
+    body: () => ({ vault_key_version: 1, items: [{ id: `item_${'C'.repeat(22)}`, ciphertext: fakeCiphertext() }] }),
+    expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403),
+  },
+  {
     name: 'PUT /v1/items/{id}',
     method: 'PUT',
     path: (c) => `/v1/items/${c.itemId}`,

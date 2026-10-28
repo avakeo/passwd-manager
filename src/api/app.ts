@@ -24,6 +24,10 @@ const ITEM_ENVELOPE_LENGTHS = [512, 1024, 4096, 16384, 65536].map((b) => b + 30)
 const MAX_ITEM_ENVELOPE = ITEM_ENVELOPE_LENGTHS[ITEM_ENVELOPE_LENGTHS.length - 1]!;
 // 本文の上限：最大の暗号文を base64url にした長さ（約 87KB）＋ JSON の余裕
 const MAX_BODY_BYTES = 96 * 1024;
+// CSV インポートの一括作成だけは、1回の送信を1.5MB・500件まで受ける（仕様書「CSVインポート」）
+const IMPORT_PATH = '/v1/items/import';
+const MAX_IMPORT_BYTES = 1_500_000;
+const MAX_IMPORT_ITEMS = 500;
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const BASE64URL = /^[A-Za-z0-9_-]*$/;
@@ -63,7 +67,9 @@ export function createApp() {
       maxAge: 600,
     }),
   );
-  app.use('/v1/*', bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) }));
+  const defaultLimit = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) });
+  const importLimit = bodyLimit({ maxSize: MAX_IMPORT_BYTES, onError: () => problem(413) });
+  app.use('/v1/*', (c, next) => (c.req.method === 'POST' && c.req.path === IMPORT_PATH ? importLimit(c, next) : defaultLimit(c, next)));
   // 公開の入口（ログイン、更新、TOTP の一時トークン）のほかは、セッションで認証し、認可の表（auth.ts の authorize）で確かめる
   app.use('/v1/*', async (c, next) => {
     const key = routeKey(c.req.method, c.req.path);
@@ -224,6 +230,49 @@ export function createApp() {
     );
     if (changes !== 1) throw new HttpProblem(409); // 既存の ID（I-03）
     return c.json({ id: body.id, revision: 1 }, 201);
+  });
+
+  // CSV インポートの一括作成（M-04）。暗号文は1件ずつ、POST /v1/items と同じ形を確かめる。
+  // 3つの文を1つのバッチ（トランザクション）にする。どれかが失敗すれば全体が巻き戻る。
+  //   1. json_each で全件を作る。change_seq は、2 で増やした後の Vault リビジョン。既存の ID があれば主キーの制約違反（I-03 の 409）
+  //   2. Vault リビジョンを1増やす（何件でも1つ）
+  //   3. 監査ログを1件ずつ書く
+  app.post(IMPORT_PATH, async (c) => {
+    const p = c.get('principal');
+    const body = await readJson(c.req.raw, ['vault_key_version', 'items']);
+    if (!isPositiveInt(body.vault_key_version) || !Array.isArray(body.items) || body.items.length === 0) throw new HttpProblem(400);
+    if (body.items.length > MAX_IMPORT_ITEMS) throw new HttpProblem(413);
+    const seen = new Set<string>();
+    const items = body.items.map((raw: unknown) => {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || Object.keys(raw).sort().join(',') !== 'ciphertext,id') throw new HttpProblem(400);
+      const { id, ciphertext } = raw as Record<string, unknown>;
+      if (typeof id !== 'string' || !ID_PATTERN.test(id) || seen.has(id)) throw new HttpProblem(400);
+      seen.add(id);
+      return { id, ciphertext: checkItemCiphertext(ciphertext) };
+    });
+    if (body.vault_key_version !== p.currentVaultKeyVersion) throw new HttpProblem(409);
+    const db = c.env.DB;
+    const now = Date.now();
+    const json = JSON.stringify(items);
+    try {
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq)
+             SELECT json_extract(value, '$.id'), 1, ?, json_extract(value, '$.ciphertext'), ?, ?, ?, ?, (SELECT vault_revision + 1 FROM vault_meta WHERE id = 1)
+               FROM json_each(?)`,
+          )
+          .bind(body.vault_key_version, p.memberId, now, p.memberId, now, json),
+        db.prepare('UPDATE vault_meta SET vault_revision = vault_revision + 1 WHERE id = 1'),
+        db
+          .prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) SELECT ?, 'item.import', 'item', json_extract(value, '$.id'), ? FROM json_each(?)`)
+          .bind(p.memberId, now, json),
+      ]);
+    } catch (e) {
+      if (e instanceof Error && /constraint/i.test(e.message)) throw new HttpProblem(409);
+      throw e;
+    }
+    return c.json({ count: items.length, revision: 1 }, 201);
   });
 
   // 楽観的ロック：元にしたリビジョンがサーバーのものと違えば 409（S-01）
