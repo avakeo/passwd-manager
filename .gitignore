@@ -10,3 +10,4 @@ dist/
 extension.config.local.json
 test-results/
 playwright-report/
+*.local.csv
