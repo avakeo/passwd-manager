@@ -47,6 +47,10 @@ export const MESSAGE_SCHEMAS = {
   setupQuickUnlock: [{ passcode: PASSCODE }],
   // ロック解除を保つ（2026-10-29 追記）
   setKeepUnlocked: [{ enabled: { kind: 'boolean' } }],
+  // この端末を覚える（2026-10-29 追記）
+  rememberDevice: [{ pin: PASSCODE }],
+  resumeDevice: [{ pin: PASSCODE }],
+  forgetDevice: [{}],
   quickUnlock: [{ passcode: PASSCODE }],
   // アイテムと同期（フェーズ2b）。新しく作るときは id を受け取らない（Service Worker が作る）
   sync: [{}],
