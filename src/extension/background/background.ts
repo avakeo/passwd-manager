@@ -47,7 +47,7 @@ export function createBackground(deps: BackgroundDeps): Background {
   const items = createItemSync(ctx, vault.openVault); // アイテムと同期
   const account = createAccount(ctx, passcode, session, device); // 状態、ログイン、TOTP、ロック、セッション
   const autofill = createAutofill(ctx, items.readItem);
-  const admin = createAdmin(ctx, vault.openVault); // 承認の照合、承認、削除（フェーズ4a） // 自動入力とコピー（フェーズ3）
+  const admin = createAdmin(ctx, vault.openVault, items.sync); // 承認の照合、承認、削除（フェーズ4a） // 自動入力とコピー（フェーズ3）
 
   const handlers: Record<Message['type'], Handler> = {
     ...account.handlers,
