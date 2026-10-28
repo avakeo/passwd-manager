@@ -152,6 +152,30 @@ function loginSection(): HTMLElement {
   return section('ログイン', 'login', button, out);
 }
 
+// ロック解除を保つ（2026-10-29 追記）。オンにするのはマスターパスワードで解除した状態からだけ
+function keepUnlockedSection(on: boolean, canEnable: boolean): HTMLElement {
+  const out = result();
+  const toggle = el('input', { type: 'checkbox', className: 'switch' });
+  toggle.checked = on;
+  toggle.disabled = !on && !canEnable;
+  toggle.addEventListener('change', async () => {
+    const r = await send({ type: 'setKeepUnlocked', enabled: toggle.checked });
+    if (!r.ok) toggle.checked = !toggle.checked;
+    show(out, r, r.keepUnlocked ? 'オンにしました。ブラウザを閉じるまで、入力なしで使えます。' : 'オフにしました。');
+  });
+  return section(
+    'ロック解除を保つ',
+    'keep-unlocked',
+    el('label', { className: 'toggle' }, toggle, el('span', { text: 'ブラウザを閉じるまで、マスターパスワードなしで使う' })),
+    el('p', {
+      text: 'Vault 鍵を、ブラウザのメモリ（ディスクには書かない）に置きます。ロックを押す、45分放置する、ブラウザを閉じると消えます。その間にこのブラウザを触れる人は、アイテムをすべて見られます。管理操作には、いつもマスターパスワードが要ります。',
+      className: 'muted',
+    }),
+    ...(on || canEnable ? [] : [el('p', { text: 'オンにするには、マスターパスワードでロック解除してください。', className: 'muted' })]),
+    out,
+  );
+}
+
 // 今ロック解除だけの画面を出しているか（タブに戻ったときに、描き直すかを決める）
 let showingLock = false;
 
@@ -218,6 +242,7 @@ async function render(notice?: string): Promise<void> {
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
+  if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   settings.append(stepUpSection(), await sessionsSection(), totpSection(true));
   if (s.hasKey === true) settings.append(keySection(true));

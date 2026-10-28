@@ -7,6 +7,7 @@
 //   - アイテム（2b）：保存の前と復号の後に validateItem を通す。storage.local には暗号文だけをキャッシュし、平文の一覧はメモリだけ（item-sync.ts）
 //   - 自動入力とコピー（3）：ポップアップからの操作でだけ注入する。入力の直前にタブと文書を取り直す。コピーはオフスクリーンドキュメントで1分後に消す（autofill.ts）
 //   - クイックロック解除（2b）：Vault 鍵だけを、パスコード由来の鍵で包んで storage.session に置く。戻った状態は秘密鍵を持たない（passcode.ts）
+//   - ロック解除を保つ（2026-10-29）：利用者が選んだときだけ、Vault 鍵を storage.session に置き、止まった後も入力なしで戻る（session-unlock.ts）
 // このファイルは、メッセージの入口と、種類ごとの処理の表をまとめる。処理の中身は account.ts、vault.ts、passcode.ts、item-sync.ts にある
 
 import type { MessageSender } from './chrome-like.ts';
@@ -15,6 +16,7 @@ import { ApiError } from './api-client.ts';
 import { createAccount } from './account.ts';
 import { createItemSync } from './item-sync.ts';
 import { createPasscode } from './passcode.ts';
+import { createSessionUnlock } from './session-unlock.ts';
 import { createVault } from './vault.ts';
 import { createAutofill } from './autofill.ts';
 import { Fail, LAST_ACTIVITY_KEY, createContext, type BackgroundDeps, type Handler, type Reply } from './context.ts';
@@ -35,16 +37,18 @@ export function createBackground(deps: BackgroundDeps): Background {
   const { chrome, state, checkIdle } = ctx;
 
   // 処理のまとまりごとのファイル。どれも同じ ctx（この createBackground の状態）を使う
-  const vault = createVault(ctx); // ロック解除、鍵の作成、最初の Vault
+  const session = createSessionUnlock(ctx); // ロック解除を保つ
+  const vault = createVault(ctx, session.afterPasswordUnlock); // ロック解除、鍵の作成、最初の Vault
   const passcode = createPasscode(ctx); // クイックロック解除
   const items = createItemSync(ctx, vault.openVault); // アイテムと同期
-  const account = createAccount(ctx, passcode); // 状態、ログイン、TOTP、ロック、セッション
+  const account = createAccount(ctx, passcode, session); // 状態、ログイン、TOTP、ロック、セッション
   const autofill = createAutofill(ctx, items.readItem); // 自動入力とコピー（フェーズ3）
 
   const handlers: Record<Message['type'], Handler> = {
     ...account.handlers,
     ...vault.handlers,
     ...passcode.handlers,
+    ...session.handlers,
     ...items.handlers,
     ...autofill.handlers,
   };
@@ -66,6 +70,8 @@ export function createBackground(deps: BackgroundDeps): Background {
       await checkIdle();
       if (!PASSIVE_TYPES.has(message.type)) await chrome.storage.session.set({ [LAST_ACTIVITY_KEY]: Date.now() });
       try {
+        // ロック解除を保つ設定なら、放置の確認の後に、置いた Vault 鍵で戻る（E-19）
+        await session.resume();
         return await handlers[message.type](message, sender);
       } catch (e) {
         if (e instanceof Fail || e instanceof ApiError) return { ok: false, error: e.code };

@@ -7,8 +7,13 @@ import { ApiError } from './api-client.ts';
 import { groupBase32 } from './api-shapes.ts';
 import { Fail, QUICK_UNLOCK_MAX_FAILURES, type Context, type Handler } from './context.ts';
 import type { createPasscode } from './passcode.ts';
+import type { createSessionUnlock } from './session-unlock.ts';
 
-export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof createPasscode>, 'quickKey' | 'parseQuick'>) {
+export function createAccount(
+  ctx: Context,
+  passcode: Pick<ReturnType<typeof createPasscode>, 'quickKey' | 'parseQuick'>,
+  session: Pick<ReturnType<typeof createSessionUnlock>, 'enabled'>,
+) {
   const { deps, chrome, sessions, api, state, lock, readySession, expect, getMe } = ctx;
   const { quickKey, parseQuick } = passcode;
 
@@ -43,6 +48,7 @@ export function createAccount(ctx: Context, passcode: Pick<ReturnType<typeof cre
         hasKey: me.key !== null,
         vault: me.key === null ? 'no-key' : base.vault,
         recoveryCodesRemaining: me.recoveryCodesRemaining,
+        keepUnlocked: await session.enabled(me.id),
       };
     },
 

@@ -45,6 +45,8 @@ export const MESSAGE_SCHEMAS = {
   revokeSession: [{ sessionId: { kind: 'string', min: 1, max: 64, pattern: /^[A-Za-z0-9_-]+$/ } }],
   // クイックロック解除（フェーズ2b）
   setupQuickUnlock: [{ passcode: PASSCODE }],
+  // ロック解除を保つ（2026-10-29 追記）
+  setKeepUnlocked: [{ enabled: { kind: 'boolean' } }],
   quickUnlock: [{ passcode: PASSCODE }],
   // アイテムと同期（フェーズ2b）。新しく作るときは id を受け取らない（Service Worker が作る）
   sync: [{}],

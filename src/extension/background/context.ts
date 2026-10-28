@@ -67,7 +67,8 @@ export type BackgroundState = {
   // 鍵を捨てて何もしない（Codex #3）
   lockEpoch: number;
   // どの方法で解除したか。パスコードで戻った状態は Vault 鍵だけで、秘密鍵（unlocked）は持たない（E-17）
-  unlockedBy: 'password' | 'passcode' | null;
+  // 'session' はロック解除を保つ設定で戻った状態（session-unlock.ts）。passcode と同じく秘密鍵を持たない
+  unlockedBy: 'password' | 'passcode' | 'session' | null;
   vaultVersion: number | null; // 開いた Vault 鍵の世代
   // 同期の状態（メモリ）。暗号文は storage.local にもキャッシュする。平文の一覧（summary）はメモリだけ
   readonly index: Map<string, CacheEntry & { summary: Summary }>;
