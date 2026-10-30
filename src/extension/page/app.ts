@@ -7,6 +7,7 @@ import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
 import { auditSection, memberVerifySection, membersSection, rotationSection } from './members.ts';
+import { syncResetSection } from './sync-reset.ts';
 
 const root = document.getElementById('root')!;
 
@@ -298,6 +299,7 @@ async function render(notice?: string): Promise<void> {
   if (s.deviceRemembered === true) settings.append(rememberSection(true));
   if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
+  if (s.vault === 'ready') settings.append(syncResetSection(() => void render()));
   settings.append(stepUpSection(), await sessionsSection(), totpSection(true));
   if (s.hasKey === true) settings.append(keySection(true));
   root.append(settings);

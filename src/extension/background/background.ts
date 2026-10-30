@@ -44,7 +44,7 @@ export function createBackground(deps: BackgroundDeps): Background {
   const device = createDevice(ctx); // この端末を覚える
   const vault = createVault(ctx, session.afterPasswordUnlock); // ロック解除、鍵の作成、最初の Vault
   const passcode = createPasscode(ctx); // クイックロック解除
-  const items = createItemSync(ctx, vault.openVault); // アイテムと同期
+  const items = createItemSync(ctx, vault.openVault, vault.checkPassword); // アイテムと同期、同期の状態の作り直し
   const account = createAccount(ctx, passcode, session, device); // 状態、ログイン、TOTP、ロック、セッション
   const autofill = createAutofill(ctx, items.readItem);
   const admin = createAdmin(ctx, vault.openVault, items.sync, session.afterPasswordUnlock); // 承認の照合、承認、削除（フェーズ4a） // 自動入力とコピー（フェーズ3）

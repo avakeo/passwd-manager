@@ -74,6 +74,22 @@ export function createVault(ctx: Context, afterPasswordUnlock: () => Promise<voi
     return { ok: true, vault: state.vaultState };
   }
 
+  // マスターパスワードの確認だけ（同期の状態を作り直す前など）。サーバーにある自分の鍵が開けるかを見る。開いた鍵は使わずに捨てる。
+  // パスコードやロック解除を保つ設定で戻った状態は秘密鍵を持たないので、そのときは鍵 ID を比べずに、開けるかだけを見る
+  async function checkPassword(password: string): Promise<void> {
+    const me = await getMe();
+    if (me.key === null) throw new Fail('NO_KEY');
+    const record = keyRecordFromMe(me.key);
+    if (state.unlocked !== null && record.keyId !== state.unlocked.keyId) throw new Fail('KEY_CHANGED');
+    try {
+      if ('signPublicKey' in record) await unlockAdminKey(password, record);
+      else await unlockMemberKey(password, record);
+    } catch (e) {
+      if (e instanceof CryptoError) throw new Fail(e.code === 'DECRYPT_FAILED' ? 'BAD_PASSWORD' : 'KEY_REJECTED');
+      throw e;
+    }
+  }
+
   const handlers = {
     async createKey(m) {
       if (state.unlockedBy === 'passcode' || state.unlockedBy === 'session') throw new Fail('PASSWORD_REQUIRED'); // E-17
@@ -165,5 +181,5 @@ export function createVault(ctx: Context, afterPasswordUnlock: () => Promise<voi
     },
   } satisfies Record<string, Handler>;
 
-  return { handlers, openVault };
+  return { handlers, openVault, checkPassword };
 }
