@@ -238,7 +238,7 @@ export async function itemsSection(open: (id: string | null, type: 'login' | 'no
   const out = el('p', { className: 'note' });
   const s = await send({ type: 'sync' });
   if (!s.ok) {
-    out.textContent = s.error === 'ROLLBACK_DETECTED' ? 'サーバーが古い状態を返しました。同期を止めています。管理者に知らせてください。' : errorText(s.error);
+    out.textContent = s.error === 'ROLLBACK_DETECTED' ? 'サーバーが古い状態を返しました。同期を止めています。管理者に知らせてください。管理者と値を見比べた後は、「設定とセキュリティ」の「同期の状態を作り直す」で戻せます。' : errorText(s.error);
     out.className = 'error';
   }
   const r = await send({ type: 'listItems' });

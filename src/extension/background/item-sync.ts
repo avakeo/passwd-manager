@@ -3,6 +3,8 @@
 //   - storage.local には暗号文だけをキャッシュする（接続先とメンバー ID の組ごと）。平文の一覧（summary）は context.ts の状態（メモリ）だけ
 //   - 差分同期は change_seq のカーソルで取る。巻き戻し（S-09）なら何も書き換えずに止める。削除は暗号文ごと消す（S-02・S-10）
 //   - 409 は自動で送り直さない。同期してから今の版を返す（S-01）
+//   - 同期の状態の作り直し（2026-10-30、S-12）：管理者と対面で Vault リビジョンを見比べた後に、マスターパスワードを確かめて、
+//     暗号文のキャッシュ・カーソル・最後に見た Vault リビジョンを消して全件を取り直す。最後に見た値は、見比べた値から始める
 
 import { fromBase64Url, toBase64Url } from '../../crypto/bytes.ts';
 import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts';
@@ -15,7 +17,7 @@ import { Fail, type CacheEntry, type CacheRecord, type Context, type Handler, ty
 export const IMPORT_MAX_ITEMS = 500;
 export const IMPORT_MAX_BYTES = 1_500_000;
 
-export function createItemSync(ctx: Context, openVault: () => Promise<VaultState>) {
+export function createItemSync(ctx: Context, openVault: () => Promise<VaultState>, checkPassword: (password: string) => Promise<void>) {
   const { chrome, apiOrigin, api, state, lock, stillCurrent, alive, readySession, expect } = ctx;
 
   function syncKey(memberId: string): string {
@@ -178,9 +180,44 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     return toBase64Url(await encryptItem(state.vaultKey!, { itemId: id, vaultKeyVersion: state.vaultVersion!, revision }, item as unknown as ItemContent));
   }
 
+  // サーバーの今の Vault リビジョン（GET /v1/vault）
+  async function serverRevision(epoch: number): Promise<number> {
+    const body = expect(await api.call('GET', '/v1/vault'), 200, { 403: 'FORBIDDEN' });
+    if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+    const revision = Number(body.vault_revision);
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Fail('SERVER');
+    return revision;
+  }
+
   const handlers = {
     async sync() {
       return { ok: true, received: await sync() };
+    },
+
+    // 見比べる値：この端末が最後に見た Vault リビジョンと、サーバーの今の値
+    async syncStatus() {
+      const memberId = await vaultMember();
+      const epoch = state.lockEpoch;
+      await loadCache(memberId);
+      const serverNow = await serverRevision(epoch);
+      return { ok: true, deviceRevision: state.lastVaultRevision, serverRevision: serverNow };
+    },
+
+    // 作り直す。押したときのサーバーの値が、見比べた値と違えば何も消さない
+    async resetSync(m) {
+      const memberId = await vaultMember();
+      const epoch = state.lockEpoch;
+      await checkPassword(String(m.masterPassword));
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      const confirmed = Number(m.vaultRevision);
+      if ((await serverRevision(epoch)) !== confirmed) throw new Fail('REVISION_CHANGED');
+      state.index.clear();
+      state.cursor = 0;
+      state.lastVaultRevision = confirmed;
+      state.cacheLoadedFor = memberId;
+      await saveCache(memberId);
+      await sync();
+      return { ok: true, items: state.index.size };
     },
 
     async listItems() {

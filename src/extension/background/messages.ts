@@ -67,6 +67,9 @@ export const MESSAGE_SCHEMAS = {
   quickUnlock: [{ passcode: PASSCODE }],
   // アイテムと同期（フェーズ2b）。新しく作るときは id を受け取らない（Service Worker が作る）
   sync: [{}],
+  // 同期の状態を作り直す（2026-10-30 追記、判断待ち1）。vaultRevision は、管理者と見比べた「サーバーの今の値」をそのまま送り返してもらう
+  syncStatus: [{}],
+  resetSync: [{ masterPassword: { kind: 'string', min: 1, max: 1024 }, vaultRevision: { kind: 'int', min: 0 } }],
   listItems: [{}],
   getItem: [{ id: ITEM_ID }],
   saveItem: [{ item: { kind: 'item' } }, { id: ITEM_ID, revision: REVISION, item: { kind: 'item' } }],
