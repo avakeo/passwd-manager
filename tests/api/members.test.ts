@@ -4,13 +4,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { toBase64Url } from '../../src/crypto/bytes.ts';
-import { createAdminKey, createMemberKey, type AdminKeyRecord, type MemberKeyRecord } from '../../src/crypto/member-key.ts';
-import { createGrant, type Grant, type GrantSigner } from '../../src/crypto/grant.ts';
+import { createAdminKey, createMemberKey, type MemberKeyRecord } from '../../src/crypto/member-key.ts';
+import { createGrant, type GrantSigner } from '../../src/crypto/grant.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
 import { pinSigner } from '../../src/crypto/signer.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
 import { newTrust } from '../helpers/trust.ts';
 import { setup } from '../helpers/api.ts';
+import { grantBody, insertKey } from '../helpers/vault-admin.ts';
 
 const adminKey = await createAdminKey('admin-hoshi-sora-umi-42');
 const cKey = await createMemberKey('c-san-kawa-mori-yama-18');
@@ -18,40 +19,6 @@ const cKey2 = await createMemberKey('c-san-atarashii-kagi-77');
 const vaultKeyRaw = generateVaultKeyRaw();
 
 type Setup = ReturnType<typeof setup>;
-
-function insertKey(t: Setup, memberId: string, record: MemberKeyRecord | AdminKeyRecord, status = 'active') {
-  const sign = 'signPublicKey' in record ? record : undefined;
-  t.db.db
-    .prepare(
-      `INSERT INTO member_keys (id, member_id, ecdh_public_key, encrypted_private_key, ecdsa_public_key, encrypted_sign_private_key,
-                                kdf_algorithm, kdf_params, kdf_salt, format_version, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)`,
-    )
-    .run(
-      record.keyId,
-      memberId,
-      toBase64Url(record.publicKey),
-      toBase64Url(record.encryptedPrivateKey),
-      sign ? toBase64Url(sign.signPublicKey) : null,
-      sign ? toBase64Url(sign.encryptedSignPrivateKey) : null,
-      record.kdf.algorithm,
-      JSON.stringify({ iterations: record.kdf.iterations, normalization: record.kdf.normalization }),
-      toBase64Url(record.kdf.salt),
-      status,
-    );
-}
-
-function grantBody(g: Grant) {
-  return {
-    vault_key_version: g.vaultKeyVersion,
-    recipient_key_id: g.recipientKeyId,
-    ephemeral_public_key: toBase64Url(g.ephemeralPublicKey),
-    wrapped_key: toBase64Url(g.wrappedKey),
-    signer_key_id: g.signerKeyId,
-    signature: toBase64Url(g.signature),
-    format_version: g.formatVersion,
-  };
-}
 
 // 管理者（最初の Vault は済み）と、鍵を登録した承認待ちの C さん
 async function world() {

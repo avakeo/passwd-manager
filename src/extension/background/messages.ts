@@ -59,6 +59,7 @@ export const MESSAGE_SCHEMAS = {
   approveMember: [{ memberId: MEMBER_ID }],
   removeMember: [{ memberId: MEMBER_ID }],
   auditLogs: [{}],
+  rotateVault: [{}], // ローテーション（フェーズ4b）
   // この端末を覚える（2026-10-29 追記）
   rememberDevice: [{ pin: PASSCODE }],
   resumeDevice: [{ pin: PASSCODE }],

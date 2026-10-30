@@ -10,40 +10,24 @@ import { recoveryCodesRemaining, registerAuthRoutes } from './auth-routes.ts';
 import { registerKeyRoutes } from './key-routes.ts';
 import { registerDeviceRoutes } from './device-routes.ts';
 import { registerMemberRoutes } from './member-routes.ts';
+import { registerRotateRoutes } from './rotate-routes.ts';
 import type { D1Database } from './d1.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
 import { HttpProblem, problem } from './problem.ts';
 import type { Principal } from './auth.ts';
-import { fromBase64Url } from '../crypto/bytes.ts';
-import { ALG_AES_256_GCM, FORMAT_V2 } from '../crypto/format.ts';
+import { ID_PATTERN, checkItemCiphertext } from './item-shape.ts';
 
 
 export const WEB_ORIGIN = 'https://pw.example.com'; // 仮の表記。CORS で許可するのはこの1つだけ
 
-// アイテムの暗号文の長さ（パディング単位 ＋ 形式1 ＋ アルゴリズムID1 ＋ ノンス12 ＋ 認証タグ16）
-const ITEM_ENVELOPE_LENGTHS = [512, 1024, 4096, 16384, 65536].map((b) => b + 30);
-const MAX_ITEM_ENVELOPE = ITEM_ENVELOPE_LENGTHS[ITEM_ENVELOPE_LENGTHS.length - 1]!;
 // 本文の上限：最大の暗号文を base64url にした長さ（約 87KB）＋ JSON の余裕
 const MAX_BODY_BYTES = 96 * 1024;
-// CSV インポートの一括作成だけは、1回の送信を1.5MB・500件まで受ける（仕様書「CSVインポート」）
+// CSV インポートの一括作成とローテーションだけは、1回の送信を1.5MB まで受ける（仕様書「CSVインポート」「メンバーの削除とローテーション」）
 const IMPORT_PATH = '/v1/items/import';
-const MAX_IMPORT_BYTES = 1_500_000;
+const ROTATE_PATH = '/v1/vault/rotate';
+export const MAX_IMPORT_BYTES = 1_500_000;
 const MAX_IMPORT_ITEMS = 500;
-
-const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const BASE64URL = /^[A-Za-z0-9_-]*$/;
-
-// アイテムの暗号文の形だけを確かめる（中身は読めないし、読まない）
-function checkItemCiphertext(ciphertext: unknown): string {
-  if (typeof ciphertext !== 'string' || !BASE64URL.test(ciphertext) || ciphertext.length % 4 === 1) throw new HttpProblem(400);
-  if (Math.floor((ciphertext.length * 3) / 4) > MAX_ITEM_ENVELOPE) throw new HttpProblem(413);
-  const bytes = fromBase64Url(ciphertext);
-  if (!ITEM_ENVELOPE_LENGTHS.includes(bytes.length)) throw new HttpProblem(400);
-  // 先頭2バイトが 0x02 0x01（アイテムの形式 v2、AES-256-GCM）
-  if (bytes[0] !== FORMAT_V2 || bytes[1] !== ALG_AES_256_GCM) throw new HttpProblem(400);
-  return ciphertext;
-}
 
 function isPositiveInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
@@ -71,7 +55,7 @@ export function createApp() {
   );
   const defaultLimit = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: () => problem(413) });
   const importLimit = bodyLimit({ maxSize: MAX_IMPORT_BYTES, onError: () => problem(413) });
-  app.use('/v1/*', (c, next) => (c.req.method === 'POST' && c.req.path === IMPORT_PATH ? importLimit(c, next) : defaultLimit(c, next)));
+  app.use('/v1/*', (c, next) => (c.req.method === 'POST' && (c.req.path === IMPORT_PATH || c.req.path === ROTATE_PATH) ? importLimit(c, next) : defaultLimit(c, next)));
   // 公開の入口（ログイン、更新、TOTP の一時トークン）のほかは、セッションで認証し、認可の表（auth.ts の authorize）で確かめる
   app.use('/v1/*', async (c, next) => {
     const key = routeKey(c.req.method, c.req.path);
@@ -92,6 +76,7 @@ export function createApp() {
   registerKeyRoutes(app);
   registerDeviceRoutes(app);
   registerMemberRoutes(app);
+  registerRotateRoutes(app);
 
   // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
   // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。

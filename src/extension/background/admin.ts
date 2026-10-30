@@ -8,6 +8,9 @@
 import { fromBase64Url, toBase64Url, wipe } from '../../crypto/bytes.ts';
 import { CryptoError } from '../../crypto/errors.ts';
 import { createGrant, openGrantForAdmin, type Grant } from '../../crypto/grant.ts';
+import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts';
+import { generateVaultKeyRaw, importVaultKey } from '../../crypto/vault-key.ts';
+import { validateItem } from '../../client/item-data.ts';
 import { fingerprint, pinPublicKey } from '../../crypto/public-key.ts';
 import { pinSigner } from '../../crypto/signer.ts';
 import { grantFromApi } from './api-shapes.ts';
@@ -28,7 +31,11 @@ function grantBody(g: Grant) {
   };
 }
 
-export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>) {
+// ローテーションの1回の送信の上限（src/api/app.ts と同じ）
+export const ROTATE_MAX_BYTES = 1_500_000;
+
+// afterRotate：ローテーションで鍵を切り替えた後に呼ぶ（ロック解除を保つ設定なら、新しい世代の鍵で置き直す）
+export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, sync: () => Promise<number>, afterRotate: () => Promise<void> = async () => undefined) {
   const { chrome, apiOrigin, api, state, lock, stillCurrent, readySession, trustFor, expect, getMe } = ctx;
 
   async function fetchMembers(): Promise<{ members: ApiMember[]; current: number }> {
@@ -202,6 +209,81 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>) 
       if (m.memberId === s.memberId) throw new Fail('CANNOT_REMOVE_SELF');
       expect(await api.call('DELETE', `/v1/members/${String(m.memberId)}`), 204, { 403: 'STEP_UP_REQUIRED', 404: 'NOT_FOUND', 409: 'CANNOT_REMOVE_SELF' });
       return { ok: true, rotationRecommended: true };
+    },
+
+    // ローテーション（12.4、仕様書「メンバーの削除とローテーション」）。
+    //   1. サーバーの全アイテム（差分なしで全件）と Vault リビジョン、有効なメンバーの鍵を取る
+    //   2. 全アイテムを今の鍵で開く。開けないものが1つでもあれば止める（書き換えると中身が失われる）
+    //   3. 新しい世代の Vault 鍵を作り、全アイテムをリビジョン+1 の AAD で暗号化し直し、固定値と照合してから全員分のグラントを作る
+    //   4. 1回で送る。409 なら何も変わっていないので、やり直してもらう。成功したら、新しい鍵に切り替えて同期する
+    async rotateVault() {
+      const s = await asAdmin();
+      const u = unlockedAdmin();
+      if (state.vaultKey === null || state.vaultVersion === null) throw new Fail('LOCKED');
+      const epoch = state.lockEpoch;
+      const oldKey = state.vaultKey;
+      const current = state.vaultVersion;
+      const next = current + 1;
+      const listed = expect(await api.call('GET', '/v1/items?after=0'), 200);
+      const fromRevision = Number(listed.vault_revision);
+      const rows = (Array.isArray(listed.items) ? (listed.items as Record<string, unknown>[]) : []).filter((r) => r.deleted !== true && typeof r.ciphertext === 'string');
+      const contents: { id: string; revision: number; content: ItemContent }[] = [];
+      for (const r of rows) {
+        const id = String(r.id);
+        const revision = Number(r.revision);
+        if (Number(r.vault_key_version) !== current) throw new Fail('UNREADABLE_ITEMS');
+        const content = await decryptItem(oldKey, { itemId: id, vaultKeyVersion: current, revision }, fromBase64Url(String(r.ciphertext))).catch(() => null);
+        if (content === null) throw new Fail('UNREADABLE_ITEMS');
+        contents.push({ id, revision, content: validateItem(content) as unknown as ItemContent });
+      }
+      const { members } = await fetchMembers();
+      const recipients = members.filter((x) => x.status === 'active' && x.key !== null);
+      const pins = chromePinStore(chrome.storage.local, apiOrigin, s.memberId);
+      const trust = trustFor(u.memberId);
+      const raw = generateVaultKeyRaw();
+      let newKey: CryptoKey;
+      const grants: Grant[] = [];
+      try {
+        newKey = await importVaultKey(raw);
+        for (const x of recipients) {
+          try {
+            grants.push(
+              await createGrant({
+                pins,
+                signer: { memberId: u.memberId, keyId: u.keyId, privateKey: u.signPrivateKey, trust },
+                memberId: x.id,
+                recipient: { keyId: x.key!.id, publicKey: fromBase64Url(x.key!.ecdh_public_key) },
+                vaultKeyVersion: next,
+                vaultKeyRaw: raw,
+              }),
+            );
+          } catch (e) {
+            if (e instanceof CryptoError && e.code === 'PUBLIC_KEY_MISMATCH') throw new Fail('KEY_MISMATCH');
+            if (e instanceof CryptoError && e.code === 'PUBLIC_KEY_NOT_PINNED') throw new Fail('NOT_PINNED');
+            throw e;
+          }
+        }
+      } finally {
+        wipe(raw);
+      }
+      const items = [];
+      for (const it of contents) {
+        items.push({ id: it.id, revision: it.revision + 1, ciphertext: toBase64Url(await encryptItem(newKey, { itemId: it.id, vaultKeyVersion: next, revision: it.revision + 1 }, it.content)) });
+      }
+      const body = { from_vault_revision: fromRevision, vault_key_version: next, items, grants: grants.map(grantBody) };
+      if (JSON.stringify(body).length > ROTATE_MAX_BYTES) throw new Fail('TOO_LARGE');
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      const res = await api.call('POST', '/v1/vault/rotate', body);
+      if (res.status === 409) throw new Fail('ROTATION_CONFLICT');
+      expect(res, 200, { 403: 'STEP_UP_REQUIRED', 413: 'TOO_LARGE', 400: 'BAD_REQUEST' });
+      // 新しい世代に切り替える。最後に見た世代を上げ、手元の鍵を差し替えてから同期する
+      await trust.generations.raise(next);
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
+      state.vaultKey = newKey;
+      state.vaultVersion = next;
+      await afterRotate();
+      await sync().catch(() => undefined);
+      return { ok: true, vaultKeyVersion: next, items: items.length };
     },
 
     async auditLogs() {

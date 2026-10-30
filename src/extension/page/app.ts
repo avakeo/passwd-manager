@@ -6,7 +6,7 @@ import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts
 import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
-import { auditSection, memberVerifySection, membersSection } from './members.ts';
+import { auditSection, memberVerifySection, membersSection, rotationSection } from './members.ts';
 
 const root = document.getElementById('root')!;
 
@@ -288,7 +288,7 @@ async function render(notice?: string): Promise<void> {
     await showList();
     root.append(slot);
     // 管理者：メンバーの照合・承認・削除と、監査ログ（フェーズ4a）
-    if (member.role === 'admin') root.append(await membersSection(() => void render()), await auditSection());
+    if (member.role === 'admin') root.append(await membersSection(() => void render()), rotationSection(() => void showList()), await auditSection());
   }
   // メンバー：承認を待っている間は、管理者との照合の画面を出す（P-04・P-06）
   if (s.vault === 'awaiting-approval') root.append(await memberVerifySection(() => void render()));

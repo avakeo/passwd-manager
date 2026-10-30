@@ -333,5 +333,5 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     },
   } satisfies Record<string, Handler>;
 
-  return { handlers, readItem };
+  return { handlers, readItem, sync };
 }
