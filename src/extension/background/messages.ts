@@ -26,6 +26,9 @@ const RECOVERY: Field = { kind: 'string', min: 1, max: 64, pattern: /^[A-Za-z0-9
 const PASSCODE: Field = { kind: 'string', min: 4, max: 4, pattern: /^[0-9]{4}$/ };
 const ITEM_ID: Field = { kind: 'string', min: 1, max: 64, pattern: /^item_[A-Za-z0-9_-]{22}$/ };
 const REVISION: Field = { kind: 'int', min: 1 };
+const MEMBER_ID: Field = { kind: 'string', min: 8, max: 72, pattern: /^member_[A-Za-z0-9_-]{1,64}$/ };
+const KEY_ID: Field = { kind: 'string', min: 26, max: 26, pattern: /^key_[A-Za-z0-9_-]{22}$/ };
+const FINGERPRINT: Field = { kind: 'string', min: 35, max: 35, pattern: /^\d{5}( \d{5}){5}$/ };
 
 // 種類ごとに、受け付ける項目の組（どれか1つにぴったり合うこと）
 export const MESSAGE_SCHEMAS = {
@@ -47,6 +50,15 @@ export const MESSAGE_SCHEMAS = {
   setupQuickUnlock: [{ passcode: PASSCODE }],
   // ロック解除を保つ（2026-10-29 追記）
   setKeepUnlocked: [{ enabled: { kind: 'boolean' } }],
+  // 承認の照合、承認、削除、監査ログ（フェーズ4a）。照合は、画面に出した値をそのまま送り返してもらう
+  adminSigner: [{}],
+  confirmAdminSigner: [{ keyId: KEY_ID, fingerprint: FINGERPRINT, vaultKeyVersion: REVISION }],
+  reopenVault: [{}],
+  listMembers: [{}],
+  pinMember: [{ memberId: MEMBER_ID, keyId: KEY_ID, fingerprint: FINGERPRINT }],
+  approveMember: [{ memberId: MEMBER_ID }],
+  removeMember: [{ memberId: MEMBER_ID }],
+  auditLogs: [{}],
   // この端末を覚える（2026-10-29 追記）
   rememberDevice: [{ pin: PASSCODE }],
   resumeDevice: [{ pin: PASSCODE }],

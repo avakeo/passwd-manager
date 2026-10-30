@@ -6,6 +6,7 @@ import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts
 import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
+import { auditSection, memberVerifySection, membersSection } from './members.ts';
 
 const root = document.getElementById('root')!;
 
@@ -286,7 +287,11 @@ async function render(notice?: string): Promise<void> {
     };
     await showList();
     root.append(slot);
+    // 管理者：メンバーの照合・承認・削除と、監査ログ（フェーズ4a）
+    if (member.role === 'admin') root.append(await membersSection(() => void render()), await auditSection());
   }
+  // メンバー：承認を待っている間は、管理者との照合の画面を出す（P-04・P-06）
+  if (s.vault === 'awaiting-approval') root.append(await memberVerifySection(() => void render()));
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));

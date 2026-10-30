@@ -19,6 +19,7 @@ import { createItemSync } from './item-sync.ts';
 import { createPasscode } from './passcode.ts';
 import { createSessionUnlock } from './session-unlock.ts';
 import { createDevice } from './device.ts';
+import { createAdmin } from './admin.ts';
 import { createVault } from './vault.ts';
 import { createAutofill } from './autofill.ts';
 import { Fail, LAST_ACTIVITY_KEY, createContext, type BackgroundDeps, type Handler, type Reply } from './context.ts';
@@ -45,7 +46,8 @@ export function createBackground(deps: BackgroundDeps): Background {
   const passcode = createPasscode(ctx); // クイックロック解除
   const items = createItemSync(ctx, vault.openVault); // アイテムと同期
   const account = createAccount(ctx, passcode, session, device); // 状態、ログイン、TOTP、ロック、セッション
-  const autofill = createAutofill(ctx, items.readItem); // 自動入力とコピー（フェーズ3）
+  const autofill = createAutofill(ctx, items.readItem);
+  const admin = createAdmin(ctx, vault.openVault); // 承認の照合、承認、削除（フェーズ4a） // 自動入力とコピー（フェーズ3）
 
   const handlers: Record<Message['type'], Handler> = {
     ...account.handlers,
@@ -55,6 +57,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     ...device.handlers,
     ...items.handlers,
     ...autofill.handlers,
+    ...admin.handlers,
   };
 
   return {
