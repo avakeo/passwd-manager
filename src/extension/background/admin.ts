@@ -4,6 +4,8 @@
 //   - メンバー：管理者の署名用公開鍵を固定し、その世代で最後に見た世代を初期化する（pinSigner。P-04・P-07）
 //   - 管理者：メンバーの鍵 ID と公開鍵の組を固定する（pinPublicKey）。承認では、固定値と照合してからグラントを作る（createGrant。P-01）
 //   - 管理操作（承認、削除）は、マスターパスワードで解除した状態でだけ行う（E-17）。5分以内の TOTP の確認はサーバーが求める（A-10）
+//   - 管理者が端末を初期化した後（2026-10-30、P-08。仕様書の手順8）：メンバーの端末に出ている「固定した管理者の署名鍵」と
+//     「最後に見た世代」を対面で見比べ、その世代で管理者の端末を初期化する。それまでは自分宛てのグラントを開かず、グラントも作らない
 
 import { fromBase64Url, toBase64Url, wipe } from '../../crypto/bytes.ts';
 import { CryptoError } from '../../crypto/errors.ts';
@@ -12,7 +14,7 @@ import { decryptItem, encryptItem, type ItemContent } from '../../crypto/item.ts
 import { generateVaultKeyRaw, importVaultKey } from '../../crypto/vault-key.ts';
 import { validateItem } from '../../client/item-data.ts';
 import { fingerprint, pinPublicKey } from '../../crypto/public-key.ts';
-import { pinSigner } from '../../crypto/signer.ts';
+import { pinSigner, pinnedSignerAndGeneration } from '../../crypto/signer.ts';
 import { grantFromApi } from './api-shapes.ts';
 import { chromePinStore } from './storage.ts';
 import { Fail, type Context, type Handler, type VaultState } from './context.ts';
@@ -116,6 +118,45 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
       await pinSigner(trustFor(s.memberId), { memberId: signer.memberId, keyId: signer.keyId, publicKey: signer.publicKey }, signer.vaultKeyVersion);
       const vault = state.unlocked !== null ? await reopen() : state.vaultState;
       return { ok: true, vault };
+    },
+
+    // 照合に使う、この端末の記録（だれでも）：固定した管理者の署名鍵と、最後に見た世代。管理者が端末を初期化した後に見比べる
+    async deviceTrust() {
+      const s = await readySession();
+      const trust = trustFor(s.memberId);
+      const pin = await trust.signerPins.get();
+      return { ok: true, signerFingerprint: pin ? await fingerprint(pin.publicKey) : null, lastSeenGeneration: (await trust.generations.get()) ?? null };
+    },
+
+    // 管理者の端末の世代の初期化の画面に出す値。署名鍵は、ロック解除できた自分の行の値（AAD で結びついている）。世代はサーバーの今の値
+    async ownSigner() {
+      await asAdmin();
+      const u = unlockedAdmin();
+      if (!u.signPublicKey) throw new Fail('NOT_ADMIN');
+      const vault = expect(await api.call('GET', '/v1/vault'), 200);
+      const needed = await pinnedSignerAndGeneration(trustFor(u.memberId)).then(
+        () => false,
+        () => true,
+      );
+      return { ok: true, keyId: u.keyId, fingerprint: await fingerprint(u.signPublicKey), vaultKeyVersion: Number(vault.current_vault_key_version), needed };
+    },
+
+    // 管理者が「一致」を押した。固定がまだないときだけ、見せた値とサーバーの今の値が同じなら、その世代で初期化する
+    async confirmGeneration(m) {
+      await asAdmin();
+      const u = unlockedAdmin();
+      if (!u.signPublicKey) throw new Fail('NOT_ADMIN');
+      const trust = trustFor(u.memberId);
+      if (await pinnedSignerAndGeneration(trust).then(() => true, () => false)) throw new Fail('NOT_NEEDED');
+      const vault = expect(await api.call('GET', '/v1/vault'), 200);
+      const current = Number(vault.current_vault_key_version);
+      if (m.keyId !== u.keyId || m.fingerprint !== (await fingerprint(u.signPublicKey)) || m.vaultKeyVersion !== current) throw new Fail('GENERATION_CHANGED');
+      await pinSigner(trust, { memberId: u.memberId, keyId: u.keyId, publicKey: u.signPublicKey }, current);
+      // 自分宛てのグラントを作るときの照合にも使う（initVault と同じ）。メンバーの固定は、一覧で照合し直してもらう
+      await pinPublicKey(chromePinStore(chrome.storage.local, apiOrigin, u.memberId), u.memberId, { keyId: u.keyId, publicKey: u.publicKey });
+      const opened = await reopen();
+      if (opened === 'ready') await sync().catch(() => undefined);
+      return { ok: true, vault: opened };
     },
 
     async reopenVault() {

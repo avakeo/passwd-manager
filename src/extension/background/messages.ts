@@ -60,6 +60,10 @@ export const MESSAGE_SCHEMAS = {
   removeMember: [{ memberId: MEMBER_ID }],
   auditLogs: [{}],
   rotateVault: [{}], // ローテーション（フェーズ4b）
+  // 管理者が端末を初期化した後の、世代の対面での初期化（2026-10-30、P-08）
+  deviceTrust: [{}],
+  ownSigner: [{}],
+  confirmGeneration: [{ keyId: KEY_ID, fingerprint: FINGERPRINT, vaultKeyVersion: REVISION }],
   // この端末を覚える（2026-10-29 追記）
   rememberDevice: [{ pin: PASSCODE }],
   resumeDevice: [{ pin: PASSCODE }],
