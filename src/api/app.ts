@@ -19,8 +19,6 @@ import type { Principal } from './auth.ts';
 import { ID_PATTERN, checkItemCiphertext } from './item-shape.ts';
 
 
-export const WEB_ORIGIN = 'https://pw.example.com'; // 仮の表記。CORS で許可するのはこの1つだけ
-
 // 本文の上限：最大の暗号文を base64url にした長さ（約 87KB）＋ JSON の余裕
 const MAX_BODY_BYTES = 96 * 1024;
 // CSV インポートの一括作成とローテーションだけは、1回の送信を1.5MB まで受ける（仕様書「CSVインポート」「メンバーの削除とローテーション」）
@@ -47,7 +45,8 @@ export function createApp() {
   app.use(
     '/v1/*',
     cors({
-      origin: (origin) => (origin === WEB_ORIGIN ? origin : null),
+      // Web ページのオリジン1つだけ（env.ts の WEB_ORIGIN。W-01・W-02）。ワイルドカードは使わない
+      origin: (origin, c) => (typeof c.env.WEB_ORIGIN === 'string' && c.env.WEB_ORIGIN !== '' && origin === c.env.WEB_ORIGIN ? origin : null),
       allowHeaders: ['Authorization', 'Content-Type'],
       allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
       maxAge: 600,

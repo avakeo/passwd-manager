@@ -120,6 +120,16 @@ async function checkRecoveryCode(db: D1Database, memberId: string, code: unknown
   return false;
 }
 
+// 戻り先が Web ページ（設定したオリジン）か。オリジンを URL として比べる（前方一致にしない）
+function isWebRedirect(webOrigin: string | undefined, redirectUri: string): boolean {
+  if (typeof webOrigin !== 'string' || webOrigin === '') return false;
+  try {
+    return new URL(redirectUri).origin === webOrigin;
+  } catch {
+    return false;
+  }
+}
+
 export function registerAuthRoutes(app: Hono<Env>): void {
   // ログイン（公開）。Discord の認可コードと PKCE の検証値を受け取り、ロールを確かめてセッションを発行する。
   app.post('/v1/auth/discord', async (c) => {
@@ -129,6 +139,9 @@ export function registerAuthRoutes(app: Hono<Env>): void {
     // 受け付ける redirect_uri は設定に書いたものだけ。違えば Discord に問い合わせもしない（A-13）
     const allowed = c.env.DISCORD_REDIRECT_URIS.split(',').map((s) => s.trim()).filter((s) => s !== '');
     if (!allowed.includes(body.redirect_uri)) throw new HttpProblem(400);
+
+    // 戻り先が Web ページなら、Web 用（読み取り専用）のセッションにする（2026-11-01 追記。W-06）
+    const scope = isWebRedirect(c.env.WEB_ORIGIN, body.redirect_uri) ? 'web' : 'extension';
 
     const user = await exchangeCodeForUser(c.env, { code: body.code, codeVerifier: body.code_verifier, redirectUri: body.redirect_uri });
     if (!(await hasTeamRole(c.env, user.id))) throw new HttpProblem(403); // A-03
@@ -145,6 +158,8 @@ export function registerAuthRoutes(app: Hono<Env>): void {
       .first<MemberRow>();
     if (!m) throw new HttpProblem(500);
     if (m.status === 'removed') throw new HttpProblem(403);
+    // Web 用のトークンでは TOTP を登録できない（読み取り専用）。登録は拡張機能で済ませてもらう（W-07）
+    if (scope === 'web' && Number(m.has_totp) !== 1) throw new HttpProblem(403);
     await audit(db, m.id, 'auth.login');
 
     // TOTP を登録している人には、TOTP の確認にしか使えない5分の一時トークンだけを返す
@@ -154,8 +169,8 @@ export function registerAuthRoutes(app: Hono<Env>): void {
       // 期限の切れた一時トークンは、新しく作るときに消す（使われずに溜まらないように）
       await db.prepare('DELETE FROM auth_challenges WHERE expires_at <= ?').bind(now).run();
       await db
-        .prepare(`INSERT INTO auth_challenges (id, member_id, challenge_hash, scope, device_label, created_at, expires_at) VALUES (?, ?, ?, 'extension', ?, ?, ?)`)
-        .bind(newId('challenge'), m.id, await sha256Hex(challenge), label, now, now + CHALLENGE_TTL_MS)
+        .prepare(`INSERT INTO auth_challenges (id, member_id, challenge_hash, scope, device_label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(newId('challenge'), m.id, await sha256Hex(challenge), scope, label, now, now + CHALLENGE_TTL_MS)
         .run();
       return c.json({ status: 'totp_required', challenge_token: challenge, challenge_expires_at: now + CHALLENGE_TTL_MS, member: memberView(m) });
     }
