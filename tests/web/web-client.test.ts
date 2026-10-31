@@ -1,0 +1,155 @@
+// Web ページのログインと API の呼び出し（2026-11-01 追記、判断待ち10）。画面から切り離した src/web/page/web-client.ts を、
+// 本物の API（app.request ＋ SQLite）と偽の Discord で確かめる。仕様書「Webページの配信」。
+
+import { after, beforeEach, mock, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { FakeDiscord } from '../helpers/fake-discord.ts';
+import { TEST_ENV, WEB_ORIGIN, setup } from '../helpers/api.ts';
+import { referenceTotp, stepAt } from '../helpers/totp-reference.ts';
+import { WebError, WebSession, finishLogin, startLogin, type WebConfig } from '../../src/web/page/web-client.ts';
+
+const T0 = 1_800_000_000_000;
+mock.timers.enable({ apis: ['Date'], now: T0 });
+after(() => mock.timers.reset());
+beforeEach(() => mock.timers.setTime(T0));
+
+const fake = new FakeDiscord({ clientId: TEST_ENV.DISCORD_CLIENT_ID, clientSecret: TEST_ENV.DISCORD_CLIENT_SECRET, botToken: TEST_ENV.DISCORD_BOT_TOKEN, guildId: TEST_ENV.DISCORD_GUILD_ID });
+after(fake.install());
+
+const API_ORIGIN = 'https://pw-api.example.com';
+const CONFIG: WebConfig = { apiOrigin: API_ORIGIN, discordClientId: TEST_ENV.DISCORD_CLIENT_ID, webOrigin: WEB_ORIGIN };
+
+let nextUser = 800000000000000000n;
+function newDiscordUser(): string {
+  nextUser += 1n;
+  const id = String(nextUser);
+  fake.addUser(id, { roles: [TEST_ENV.DISCORD_ROLE_ID], globalName: 'チームの人' });
+  return id;
+}
+
+class MemoryStorage {
+  readonly values = new Map<string, string>();
+  getItem(k: string) {
+    return this.values.get(k) ?? null;
+  }
+  setItem(k: string, v: string) {
+    this.values.set(k, v);
+  }
+  removeItem(k: string) {
+    this.values.delete(k);
+  }
+}
+
+// API のオリジンへの fetch だけを、本物の API（app.request）に回す。呼ばれた先を控える
+function apiFetch(t: ReturnType<typeof setup>, calls: string[] = []): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const req = new Request(input, init);
+    const url = new URL(req.url);
+    assert.equal(url.origin, API_ORIGIN, 'API のオリジン以外には送らない');
+    calls.push(`${req.method} ${url.pathname}`);
+    return t.app.request(url.pathname + url.search, { method: req.method, headers: req.headers, body: req.method === 'GET' ? undefined : await req.text() }, { DB: t.db, ...TEST_ENV });
+  }) as typeof fetch;
+}
+
+// Discord の認可画面でログインした後に、戻ってくる URL を作る
+async function discordRedirect(storage: MemoryStorage, userId: string): Promise<string> {
+  const url = new URL(await startLogin(CONFIG, storage));
+  assert.equal(url.origin + url.pathname, 'https://discord.com/oauth2/authorize');
+  assert.equal(url.searchParams.get('redirect_uri'), `${WEB_ORIGIN}/callback`);
+  const code = fake.issueCode({ userId, redirectUri: `${WEB_ORIGIN}/callback`, codeChallenge: url.searchParams.get('code_challenge')! });
+  return `${WEB_ORIGIN}/callback?code=${code}&state=${url.searchParams.get('state')}`;
+}
+
+async function member(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member') {
+  const userId = newDiscordUser();
+  const secret = crypto.getRandomValues(new Uint8Array(20));
+  await t.addMember('active', { role, discordUserId: userId, totpSecret: secret });
+  return { userId, secret };
+}
+
+async function loggedIn(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member', calls: string[] = []) {
+  const m = await member(t, role);
+  const storage = new MemoryStorage();
+  const href = await discordRedirect(storage, m.userId);
+  const { challengeToken } = await finishLogin(href, CONFIG, storage, apiFetch(t, calls));
+  return WebSession.verifyTotp(CONFIG, apiFetch(t, calls), challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
+}
+
+async function rejects(p: Promise<unknown>, code: string) {
+  await assert.rejects(p, (e: unknown) => e instanceof WebError && e.code === code);
+}
+
+test('W-06 Web ページのログイン：state と PKCE を確かめ、TOTP の後に Web 用のセッションで読める', async () => {
+  const t = setup();
+  const session = await loggedIn(t);
+  const sessions = (await session.get('/v1/me/sessions')).sessions as { scope: string; current: boolean }[];
+  assert.deepEqual(sessions.filter((s) => s.current).map((s) => s.scope), ['web']);
+  assert.equal(((await session.get('/v1/members')).members as unknown[]).length, 1);
+});
+
+test('W-06 state と検証値は sessionStorage に1回だけ置き、戻ったら消す。トークンは置かない', async () => {
+  const t = setup();
+  const m = await member(t);
+  const storage = new MemoryStorage();
+  const href = await discordRedirect(storage, m.userId);
+  assert.equal(storage.values.size, 1);
+  const { challengeToken } = await finishLogin(href, CONFIG, storage, apiFetch(t));
+  assert.equal(storage.values.size, 0);
+  // 同じ戻り先をもう一度使っても、通らない
+  await rejects(finishLogin(href, CONFIG, storage, apiFetch(t)), 'NO_PENDING');
+  await WebSession.verifyTotp(CONFIG, apiFetch(t), challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
+  assert.equal(storage.values.size, 0);
+});
+
+test('W-06 state が違う戻り先は、API に送らずに断る（A-01）', async () => {
+  const t = setup();
+  const m = await member(t);
+  const storage = new MemoryStorage();
+  const href = new URL(await discordRedirect(storage, m.userId));
+  href.searchParams.set('state', 'x'.repeat(43));
+  const calls: string[] = [];
+  await rejects(finishLogin(href.toString(), CONFIG, storage, apiFetch(t, calls)), 'STATE_MISMATCH');
+  assert.deepEqual(calls, []);
+  assert.equal(storage.values.size, 0, '失敗しても、置いた値は消す');
+});
+
+test('W-07 TOTP を登録していない人は、Web ページではログインできない', async () => {
+  const t = setup();
+  const userId = newDiscordUser();
+  const storage = new MemoryStorage();
+  await rejects(finishLogin(await discordRedirect(storage, userId), CONFIG, storage, apiFetch(t)), 'FORBIDDEN');
+});
+
+test('TOTP のコードが違えば BAD_CODE', async () => {
+  const t = setup();
+  const m = await member(t);
+  const storage = new MemoryStorage();
+  const { challengeToken } = await finishLogin(await discordRedirect(storage, m.userId), CONFIG, storage, apiFetch(t));
+  await rejects(WebSession.verifyTotp(CONFIG, apiFetch(t), challengeToken, '000000'), 'BAD_CODE');
+});
+
+test('アクセストークンの期限が切れたら、メモリのリフレッシュトークンで1回だけ更新して読み直す', async () => {
+  const t = setup();
+  const calls: string[] = [];
+  const session = await loggedIn(t, 'member', calls);
+  mock.timers.setTime(T0 + 16 * 60 * 1000);
+  assert.ok(Array.isArray((await session.get('/v1/me/sessions')).sessions));
+  assert.deepEqual(calls.slice(-3), ['GET /v1/me/sessions', 'POST /v1/auth/refresh', 'GET /v1/me/sessions']);
+});
+
+test('監査ログは、管理者がログインしてから5分の間だけ。過ぎたら FORBIDDEN（画面はログインし直すよう伝える）', async () => {
+  const t = setup();
+  const admin = await loggedIn(t, 'admin');
+  assert.ok(Array.isArray((await admin.get('/v1/audit-logs')).logs));
+  mock.timers.setTime(T0 + 6 * 60 * 1000);
+  await rejects(admin.get('/v1/audit-logs'), 'FORBIDDEN');
+  const memberSession = await loggedIn(t);
+  await rejects(memberSession.get('/v1/audit-logs'), 'FORBIDDEN');
+});
+
+test('Web ページから呼べるのは、決めた GET の入口だけ', async () => {
+  const t = setup();
+  const session = await loggedIn(t);
+  await rejects(session.get('/v1/items?after=0'), 'NOT_ALLOWED');
+  await rejects(session.get('https://evil.example.com/v1/me'), 'NOT_ALLOWED');
+});

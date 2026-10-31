@@ -1,0 +1,22 @@
+# Web ページを配る Worker の設定の例（2026-11-01 追記、判断待ち10）。仕様書「Webページの配信」。
+# これを wrangler.web.toml にコピーして、手元の値を書く（wrangler.web.toml はコミットしない）。秘密の値はない。
+#   npm run build:web                              → dist/web を作る（web.config.local.json が要る）
+#   npx wrangler deploy -c wrangler.web.toml       → teampw-web として配る
+# workers.dev の URL は https://teampw-web.<自分のサブドメイン>.workers.dev。これが Web ページのオリジンになる。
+# API の wrangler.toml の WEB_ORIGIN と DISCORD_REDIRECT_URIS、Discord のアプリの Redirects にも同じオリジンを書く。
+
+name = "teampw-web"
+main = "src/web/worker.ts"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./dist/web"
+binding = "ASSETS"
+# どの応答にも Worker を通して、セキュリティのヘッダーを付ける（W-03）
+run_worker_first = true
+# /callback など、ファイルのないパスでも index.html を返す
+not_found_handling = "single-page-application"
+
+[vars]
+# API のオリジン。CSP の connect-src に入る。末尾のスラッシュは付けない
+API_ORIGIN = "https://<API のオリジン>"

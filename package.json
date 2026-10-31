@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test:browser": "playwright test",
     "build:extension": "node --experimental-strip-types --no-warnings scripts/build-extension.ts",
+    "build:web": "node --experimental-strip-types --no-warnings scripts/build-web.ts",
     "vectors:fetch": "node --experimental-strip-types --no-warnings scripts/fetch-vectors.ts"
   },
   "dependencies": {
