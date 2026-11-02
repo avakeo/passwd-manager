@@ -18,6 +18,8 @@ const EXTRA_ERRORS: Record<string, string> = {
   ROTATION_CONFLICT: '途中でほかの人がアイテムを変えたか、メンバーが増減しました。何も変わっていないので、もう一度押してください',
   UNREADABLE_ITEMS: '開けないアイテムがあるので止めました。書き換えると中身が失われるためです',
   TOO_LARGE: 'アイテムが多すぎて、1回で送れる大きさ（1.5MB）を超えました',
+  GENERATION_CHANGED: 'サーバーの値が、画面に出した値から変わりました。押さずに、もう一度見比べてください',
+  NOT_NEEDED: 'この端末の世代は、もう初期化されています',
 };
 
 function message(code: string | undefined): string {
@@ -197,4 +199,59 @@ export async function auditSection(): Promise<HTMLElement> {
     details.append(list);
   });
   return details;
+}
+
+// 照合に使う、この端末の記録（だれでも）。管理者が端末を初期化した後に、管理者の画面と見比べる（P-08）
+export async function deviceTrustSection(): Promise<HTMLElement> {
+  const r = await send({ type: 'deviceTrust' });
+  const section = el('section', {}, el('h2', { text: '照合に使う値' }));
+  section.id = 'device-trust';
+  if (!r.ok) {
+    section.append(el('p', { text: message(r.error), className: 'error' }));
+    return section;
+  }
+  section.append(
+    el('p', { text: '管理者が端末を初期化したときに、管理者の画面の「この端末の世代の初期化」と見比べます。どちらも、この端末に記録してある値です。', className: 'muted' }),
+    el('h3', { text: '固定した管理者の署名鍵' }),
+    fingerprintBox(r.signerFingerprint === null ? '（まだ固定していません）' : String(r.signerFingerprint)),
+    el('p', { text: `この端末が最後に見た世代：${r.lastSeenGeneration === null ? '（まだありません）' : Number(r.lastSeenGeneration)}` }),
+  );
+  return section;
+}
+
+// 管理者：端末を初期化した後の、世代の初期化（P-08）。メンバーの端末の「照合に使う値」と見比べて、一致したら押す
+export async function generationInitSection(onDone: () => void): Promise<HTMLElement> {
+  const out = el('p', { className: 'note' });
+  const r = await send({ type: 'ownSigner' });
+  const section = el('section', {}, el('h2', { text: 'この端末の世代の初期化' }));
+  section.id = 'generation-init';
+  if (!r.ok) {
+    section.append(el('p', { text: message(r.error), className: 'error' }));
+    return section;
+  }
+  section.append(
+    el('p', {
+      text: 'この端末は、署名鍵の固定と最後に見た世代の記録を失っています（端末を初期化したか、拡張機能を入れ直したため）。初期化するまで、アイテムを開かず、承認とローテーションもできません。',
+      className: 'muted',
+    }),
+    el('p', { text: 'Discord 以外の経路（対面か電話）で、メンバーのだれかの画面の「設定とセキュリティ」→「照合に使う値」と、次の2つを見比べてください。', className: 'muted' }),
+    el('h3', { text: 'あなたの署名鍵（メンバーの「固定した管理者の署名鍵」と同じか）' }),
+    fingerprintBox(String(r.fingerprint)),
+    el('p', { text: `サーバーの今の世代：${Number(r.vaultKeyVersion)}（メンバーの「この端末が最後に見た世代」と同じか）` }),
+  );
+  const confirm = el('button', { text: '両方とも一致した' });
+  confirm.addEventListener('click', async () => {
+    const x = await send({ type: 'confirmGeneration', keyId: r.keyId, fingerprint: r.fingerprint, vaultKeyVersion: r.vaultKeyVersion });
+    out.textContent = x.ok
+      ? '初期化しました。メンバーの公開鍵の固定も消えているので、「メンバー」で全員を照合し直してください（承認とローテーションの前に要ります）。'
+      : message(x.error);
+    out.className = x.ok ? 'note' : 'error';
+    if (x.ok) setTimeout(onDone, 0);
+  });
+  section.append(
+    el('p', { text: '世代が違うときは押さないでください。サーバーが古い世代を見せているおそれがあります。メンバーの端末で同期してから、もう一度見比べてください。', className: 'warn' }),
+    el('div', { className: 'row' }, confirm),
+    out,
+  );
+  return section;
 }

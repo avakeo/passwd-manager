@@ -6,7 +6,7 @@ import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts
 import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
-import { auditSection, memberVerifySection, membersSection, rotationSection } from './members.ts';
+import { auditSection, deviceTrustSection, generationInitSection, memberVerifySection, membersSection, rotationSection } from './members.ts';
 import { syncResetSection } from './sync-reset.ts';
 
 const root = document.getElementById('root')!;
@@ -293,6 +293,8 @@ async function render(notice?: string): Promise<void> {
   }
   // メンバー：承認を待っている間は、管理者との照合の画面を出す（P-04・P-06）
   if (s.vault === 'awaiting-approval') root.append(await memberVerifySection(() => void render()));
+  // 管理者：端末を初期化した後の、世代の対面での初期化（P-08）
+  if (s.vault === 'needs-generation-init' && member.role === 'admin') root.append(await generationInitSection(() => void render()));
   if (s.cacheFull) root.append(el('p', { text: '端末の保存の容量を超えたので、暗号文のキャッシュをやめています（オフラインでは見られません）。', className: 'warn' }));
   // ふだん使わない設定は、たたんでおく。URL の # が中の節を指すときだけ開く
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
@@ -300,6 +302,7 @@ async function render(notice?: string): Promise<void> {
   if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   if (s.vault === 'ready') settings.append(syncResetSection(() => void render()));
+  if (s.vault === 'ready') settings.append(await deviceTrustSection());
   settings.append(stepUpSection(), await sessionsSection(), totpSection(true));
   if (s.hasKey === true) settings.append(keySection(true));
   root.append(settings);
