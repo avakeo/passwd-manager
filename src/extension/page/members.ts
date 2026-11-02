@@ -17,6 +17,7 @@ const EXTRA_ERRORS: Record<string, string> = {
   NOT_MEMBER: '管理者の照合はメンバーだけが行います',
   ROTATION_CONFLICT: '途中でほかの人がアイテムを変えたか、メンバーが増減しました。何も変わっていないので、もう一度押してください',
   UNREADABLE_ITEMS: '開けないアイテムがあるので止めました。書き換えると中身が失われるためです',
+  ITEMS_MISSING: 'この端末が知っているアイテムを、サーバーが返しませんでした。何も変えていません。同期してからもう一度押してください。続くときは、サーバーが一部を隠しているおそれがあります',
   TOO_LARGE: 'アイテムが多すぎて、1回で送れる大きさ（1.5MB）を超えました',
   GENERATION_CHANGED: 'サーバーの値が、画面に出した値から変わりました。押さずに、もう一度見比べてください',
   NOT_NEEDED: 'この端末の世代は、もう初期化されています',
@@ -42,7 +43,7 @@ export async function memberVerifySection(onDone: () => void): Promise<HTMLEleme
   section.append(
     el('p', { text: 'Discord 以外の経路（対面か電話）で、管理者と次の2つを見比べてください。Discord のアカウントが乗っ取られていても、すり抜けられないようにするためです。', className: 'muted' }),
     el('h3', { text: 'あなたの公開鍵（管理者の画面の「メンバー」に出ます）' }),
-    fingerprintBox(String(r.ownFingerprint ?? '（鍵がありません）')),
+    fingerprintBox(String(r.ownFingerprint ?? '（マスターパスワードでロックを解除すると出ます）')),
     el('h3', { text: '管理者の署名鍵（管理者の画面の「あなたの署名鍵」と同じか）' }),
     fingerprintBox(String(r.fingerprint)),
     el('p', { text: `今の世代：${Number(r.vaultKeyVersion)}（管理者の画面の「最後に見た世代」と同じか）` }),
@@ -83,7 +84,7 @@ export async function membersSection(onChanged: () => void): Promise<HTMLElement
   section.append(
     el('p', { text: '承認するときは、Discord 以外の経路（対面か電話）で、メンバーの画面と次を見比べてもらいます。', className: 'muted' }),
     el('h3', { text: 'あなたの署名鍵' }),
-    fingerprintBox(String(r.signFingerprint ?? '（署名鍵がありません）')),
+    fingerprintBox(String(r.signFingerprint ?? '（マスターパスワードでロックを解除すると出ます）')),
     el('p', { text: `最後に見た世代：${r.lastSeenGeneration === null ? '（未設定）' : Number(r.lastSeenGeneration)}` }),
   );
   const list = el('ul', { className: 'item-list' });

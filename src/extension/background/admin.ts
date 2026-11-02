@@ -97,8 +97,10 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
       const s = await readySession();
       const signer = await fetchSigner();
       const pinned = await trustFor(s.memberId).signerPins.get();
-      const me = await getMe();
-      const own = typeof me.key?.ecdh_public_key === 'string' ? await fingerprint(fromBase64Url(me.key.ecdh_public_key)) : null;
+      // 自分の公開鍵は、サーバーの応答ではなく、ロック解除した鍵から作る（秘密鍵と AAD で結びつき、サーバーは差し替えられない。DeepSeek #1）。
+      // マスターパスワードで解除していなければ出さない
+      const u = state.unlocked;
+      const own = u !== null && u.memberId === s.memberId ? await fingerprint(u.publicKey) : null;
       return {
         ok: true,
         ownFingerprint: own, // 管理者が承認の画面で見比べる、自分の公開鍵
@@ -185,9 +187,9 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
           self: x.id === s.memberId,
         });
       }
-      // 管理者なら、メンバーが照合の画面で見比べる自分の署名用公開鍵
-      const me = await getMe();
-      const sign = typeof me.key?.ecdsa_public_key === 'string' ? await fingerprint(fromBase64Url(me.key.ecdsa_public_key)) : null;
+      // 管理者なら、メンバーが照合の画面で見比べる自分の署名用公開鍵。ロック解除した鍵から作る（DeepSeek #2。P-08 の ownSigner と同じ）
+      const u = state.unlocked;
+      const sign = u !== null && u.memberId === s.memberId && u.signPublicKey !== undefined ? await fingerprint(u.signPublicKey) : null;
       return { ok: true, members: out, signFingerprint: sign, currentVaultKeyVersion: current, lastSeenGeneration: (await trustFor(s.memberId).generations.get()) ?? null };
     },
 
@@ -248,6 +250,8 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
       const s = await asAdmin();
       unlockedAdmin();
       if (m.memberId === s.memberId) throw new Fail('CANNOT_REMOVE_SELF');
+      // 先に端末の固定を消す。サーバーが削除しなかった、または後で有効に戻しても、ローテーションは NOT_PINNED で止まる（DeepSeek #3）
+      await chromePinStore(chrome.storage.local, apiOrigin, s.memberId).remove(String(m.memberId));
       expect(await api.call('DELETE', `/v1/members/${String(m.memberId)}`), 204, { 403: 'STEP_UP_REQUIRED', 404: 'NOT_FOUND', 409: 'CANNOT_REMOVE_SELF' });
       return { ok: true, rotationRecommended: true };
     },
@@ -268,6 +272,10 @@ export function createAdmin(ctx: Context, openVault: () => Promise<VaultState>, 
       const listed = expect(await api.call('GET', '/v1/items?after=0'), 200);
       const fromRevision = Number(listed.vault_revision);
       const rows = (Array.isArray(listed.items) ? (listed.items as Record<string, unknown>[]) : []).filter((r) => r.deleted !== true && typeof r.ciphertext === 'string');
+      // この端末が同期で知っているアイテムが、サーバーの返した中にすべてあるか。隠されたアイテムは古い世代のまま残り、読めなくなるので止める（DeepSeek #4）。
+      // ほかの人が削除した後なら、同期すれば一覧から消えて通る
+      const listedIds = new Set(rows.map((r) => String(r.id)));
+      for (const id of state.index.keys()) if (!listedIds.has(id)) throw new Fail('ITEMS_MISSING');
       const contents: { id: string; revision: number; content: ItemContent }[] = [];
       for (const r of rows) {
         const id = String(r.id);

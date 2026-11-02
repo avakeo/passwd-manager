@@ -82,6 +82,45 @@ test('P-06 照合の画面：メンバーには管理者の署名鍵のフィン
   assert.deepEqual([row.status, row.fingerprint, row.pinned], ['pending', await fingerprint(memberPub), false]);
 });
 
+// 2026-11-03 追記（DeepSeek #1・#2）：相手と見比べる「自分の鍵」は、サーバーの応答ではなく、ロック解除した鍵（秘密鍵と AAD で結びつく）から作る。
+// サーバーが両方の画面に同じ偽の値を出せないようにするため
+test('P-06 固定する前にサーバーがメンバーの公開鍵を差し替えると、メンバーの画面の「あなたの公開鍵」と管理者の画面の値が食い違う（DeepSeek #1）', async () => {
+  const w = await adminWorld();
+  const { m, memberId } = await memberReady(w);
+  const real = fromBase64Url(String(w.t.db.db.prepare('SELECT ecdh_public_key FROM member_keys WHERE member_id = ?').get(memberId)!.ecdh_public_key));
+  w.t.db.db.prepare('UPDATE member_keys SET ecdh_public_key = ? WHERE member_id = ?').run(toBase64Url(otherKey.record.publicKey), memberId);
+  const shown = await send(m, { type: 'adminSigner' });
+  assert.equal(shown.ownFingerprint, await fingerprint(real), 'メンバーの画面には、端末の鍵のフィンガープリント');
+  const row = (await members(w)).list.find((x) => x.id === memberId)!;
+  assert.equal(row.fingerprint, await fingerprint(otherKey.record.publicKey));
+  assert.notEqual(shown.ownFingerprint, row.fingerprint, '見比べれば違いに気づける');
+});
+
+test('P-06 固定する前にサーバーが管理者の署名鍵を差し替えると、管理者の画面の「あなたの署名鍵」とメンバーの画面の値が食い違う（DeepSeek #2）', async () => {
+  const w = await adminWorld();
+  const { m } = await memberReady(w);
+  const real = fromBase64Url(String(w.t.db.db.prepare('SELECT ecdsa_public_key FROM member_keys WHERE ecdsa_public_key IS NOT NULL').get()!.ecdsa_public_key));
+  w.t.db.db.prepare('UPDATE member_keys SET ecdsa_public_key = ? WHERE ecdsa_public_key IS NOT NULL').run(toBase64Url(otherKey.record.publicKey));
+  const listed = await send(w, { type: 'listMembers' });
+  assert.equal(listed.signFingerprint, await fingerprint(real), '管理者の画面には、端末の署名鍵のフィンガープリント');
+  const shown = await send(m, { type: 'adminSigner' });
+  assert.equal(shown.fingerprint, await fingerprint(otherKey.record.publicKey));
+  assert.notEqual(listed.signFingerprint, shown.fingerprint, '見比べれば違いに気づける');
+});
+
+test('P-06 マスターパスワードで解除していないときは、自分の鍵のフィンガープリントを出さない（サーバーの値で代わりに出さない）', async () => {
+  const w = await adminWorld();
+  assert.equal((await send(w, { type: 'setupQuickUnlock', passcode: '2580' })).ok, true);
+  restart(w);
+  assert.equal((await send(w, { type: 'quickUnlock', passcode: '2580' }, POPUP)).ok, true);
+  assert.equal((await send(w, { type: 'listMembers' })).signFingerprint, null);
+  const { m } = await memberReady(w);
+  restart(m);
+  // メンバーはロック中（秘密鍵がない）。サーバーの値を出さない
+  const shown = await send(m, { type: 'adminSigner' });
+  assert.equal(shown.ok ? shown.ownFingerprint : null, null);
+});
+
 test('P-04 P-06 メンバーは「一致」を押すまで固定せず、グラントを開かない。違うフィンガープリントでは固定しない', async () => {
   const w = await adminWorld();
   const { m, memberId } = await memberReady(w);
