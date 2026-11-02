@@ -253,3 +253,18 @@ test('S-02 0003 を当てる前からある行（ふつうの行と削除した�
     '前からある行は、移行のときの Vault リビジョンになる',
   );
 });
+
+// 2026-11-03 追記（Codex #4）：世代を確かめてから書き込むまでの間にローテーションが入っても、古い世代の行を入れない
+test('S-07 世代を確かめた後、書き込みの直前にローテーションが入ったら、作成は 409。古い世代の行を入れない', async () => {
+  const t = setup();
+  const alice = await t.addMember('active');
+  const before = t.vaultRevision();
+  t.db.beforeBatch = async () => {
+    t.db.beforeBatch = null;
+    t.db.db.prepare('UPDATE vault_meta SET current_vault_key_version = 2 WHERE id = 1').run();
+  };
+  const res = await t.request('POST', '/v1/items', alice.token, { id: 'item_AAAAAAAAAAAAAAAAAAAAAA', vault_key_version: 1, ciphertext: fakeCiphertext() });
+  assert.equal(res.status, 409);
+  assert.equal(Number(t.db.db.prepare('SELECT COUNT(*) AS n FROM items').get()!.n), 0);
+  assert.equal(t.vaultRevision(), before);
+});

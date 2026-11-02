@@ -212,9 +212,10 @@ export function createApp() {
     const now = Date.now();
     const changes = await writeItem(
       c.env.DB,
+      // 世代はバッチの中でも確かめる。確かめてから書くまでの間にローテーションが入ったら、古い世代の行を入れずに 409（Codex #4）
       `INSERT OR IGNORE INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at)
-       VALUES (?, 1, ?, ?, ?, ?, ?, ?)`,
-      [body.id, body.vault_key_version, ciphertext, p.memberId, now, p.memberId, now],
+       SELECT ?, 1, ?, ?, ?, ?, ?, ? WHERE (SELECT current_vault_key_version FROM vault_meta WHERE id = 1) = ?`,
+      [body.id, body.vault_key_version, ciphertext, p.memberId, now, p.memberId, now, body.vault_key_version],
       p,
       'item.create',
       body.id,
@@ -224,10 +225,12 @@ export function createApp() {
   });
 
   // CSV インポートの一括作成（M-04）。暗号文は1件ずつ、POST /v1/items と同じ形を確かめる。
-  // 3つの文を1つのバッチ（トランザクション）にする。どれかが失敗すれば全体が巻き戻る。
+  // 5つの文を1つのバッチ（トランザクション）にする。どれかが失敗すれば全体が巻き戻る。
+  //   0. 今の世代が送られた世代と同じか（rotation_guard。2026-11-03 追記、Codex #4）
   //   1. json_each で全件を作る。change_seq は、2 で増やした後の Vault リビジョン。既存の ID があれば主キーの制約違反（I-03 の 409）
   //   2. Vault リビジョンを1増やす（何件でも1つ）
   //   3. 監査ログを1件ずつ書く
+  //   4. rotation_guard の行を消す
   app.post(IMPORT_PATH, async (c) => {
     const p = c.get('principal');
     const body = await readJson(c.req.raw, ['vault_key_version', 'items']);
@@ -247,6 +250,10 @@ export function createApp() {
     const json = JSON.stringify(items);
     try {
       await db.batch([
+        // 先頭で世代を確かめる。確かめてから書くまでの間にローテーションが入ったら、制約違反で全体を巻き戻して 409（Codex #4）
+        db
+          .prepare(`INSERT INTO rotation_guard (ok) SELECT CASE WHEN (SELECT current_vault_key_version FROM vault_meta WHERE id = 1) = ? THEN 1 ELSE 0 END`)
+          .bind(body.vault_key_version),
         db
           .prepare(
             `INSERT INTO items (id, revision, vault_key_version, ciphertext, created_by, created_at, updated_by, updated_at, change_seq)
@@ -258,6 +265,7 @@ export function createApp() {
         db
           .prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) SELECT ?, 'item.import', 'item', json_extract(value, '$.id'), ? FROM json_each(?)`)
           .bind(p.memberId, now, json),
+        db.prepare('DELETE FROM rotation_guard'),
       ]);
     } catch (e) {
       if (e instanceof Error && /constraint/i.test(e.message)) throw new HttpProblem(409);
