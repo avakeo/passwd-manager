@@ -11,10 +11,12 @@ class SqliteStatement implements D1PreparedStatement {
   readonly #db: DatabaseSync;
   readonly #sql: string;
   readonly #params: Value[];
+  readonly #count: () => void;
 
-  constructor(db: DatabaseSync, sql: string, params: Value[] = []) {
+  constructor(db: DatabaseSync, sql: string, count: () => void, params: Value[] = []) {
     this.#db = db;
     this.#sql = sql;
+    this.#count = count;
     this.#params = params;
   }
 
@@ -22,14 +24,16 @@ class SqliteStatement implements D1PreparedStatement {
     for (const v of values) {
       if (v !== null && typeof v !== 'number' && typeof v !== 'string') throw new TypeError(`bind できない値: ${typeof v}`);
     }
-    return new SqliteStatement(this.#db, this.#sql, values as Value[]);
+    return new SqliteStatement(this.#db, this.#sql, this.#count, values as Value[]);
   }
 
   async first<T>(): Promise<T | null> {
+    this.#count();
     return (this.#db.prepare(this.#sql).get(...this.#params) as T | undefined) ?? null;
   }
 
   async all<T>(): Promise<D1Result<T>> {
+    this.#count();
     const results = this.#db.prepare(this.#sql).all(...this.#params) as T[];
     return { results, success: true, meta: { changes: 0 } };
   }
@@ -39,6 +43,7 @@ class SqliteStatement implements D1PreparedStatement {
   }
 
   runSync<T>(): D1Result<T> {
+    this.#count();
     const r = this.#db.prepare(this.#sql).run(...this.#params);
     return { results: [], success: true, meta: { changes: Number(r.changes) } };
   }
@@ -58,8 +63,11 @@ export class SqliteD1 implements D1Database {
     }
   }
 
+  // 実行した文の数（バッチの中の文も1つずつ数える）。1回の呼び出しで D1 のクエリが50を超えないことを確かめるため（Codex #5）
+  queries = 0;
+
   prepare(sql: string): D1PreparedStatement {
-    return new SqliteStatement(this.db, sql);
+    return new SqliteStatement(this.db, sql, () => (this.queries += 1));
   }
 
   // テストで「同時に来た2つのリクエストが、どちらも確認を済ませてからバッチに入る」順を作るための待ち合わせ
