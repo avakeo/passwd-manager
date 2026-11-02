@@ -57,6 +57,11 @@ export function createSessionUnlock(ctx: Context) {
     // 開き直している間にロックされたら置かない（lock() が消した後に書き戻さない）
     if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
     await chrome.storage.session.set({ [recordKey(u.memberId)]: record });
+    // 書いている間にロックされたら、lock() が消した後に書いたかもしれないので消し直す（Codex #2）
+    if (epoch !== state.lockEpoch) {
+      await chrome.storage.session.remove(recordKey(u.memberId));
+      throw new Fail('LOCKED');
+    }
   }
 
   // マスターパスワードで解除した直後に呼ぶ。オンなら置き直す（ブラウザを閉じた後の、最初の解除）。失敗しても解除は続ける
@@ -69,12 +74,13 @@ export function createSessionUnlock(ctx: Context) {
   // メッセージを処理する前に呼ぶ。ロックされていて、保存があれば、Vault 鍵だけを取り出し不可で読み込んで戻る
   async function resume(): Promise<void> {
     if (state.unlockedBy !== null) return;
+    // 最初の await より前に控える。保存を読んでいる間にロックされたら、読んだ値で戻らない（Codex #1）
+    const epoch = state.lockEpoch;
     const s = await sessions.get();
     if (!s || s.totpSetupRequired) return;
     const key = recordKey(s.memberId);
     const stored = (await chrome.storage.session.get(key))[key];
     if (stored === undefined) return;
-    const epoch = state.lockEpoch;
     const rec = parse(stored);
     const raw = rec ? fromBase64Url(rec.vaultKey) : null;
     // 形が違う、オフにした、端末が最後に見た世代より古い（ローテーションの後）なら、戻らずに消す
@@ -85,7 +91,8 @@ export function createSessionUnlock(ctx: Context) {
       return;
     }
     const vaultKey = await importVaultKeyAndWipe(raw);
-    if (epoch !== state.lockEpoch || state.unlockedBy !== null) return;
+    // 放置の時間切れも確かめる。stillCurrent の後は await を挟まずに戻す
+    if (!(await stillCurrent(epoch)) || state.unlockedBy !== null) return;
     state.unlocked = null; // 秘密鍵は戻さない
     state.vaultKey = vaultKey;
     state.vaultVersion = rec.vaultKeyVersion;
