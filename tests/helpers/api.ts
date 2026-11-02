@@ -11,6 +11,8 @@ export type Status = 'pending' | 'active' | 'removed';
 
 export const EXTENSION_REDIRECT_URI = 'https://abcdefghijklmnopabcdefghijklmnop.chromiumapp.org/';
 export const LOCAL_REDIRECT_URI = 'http://localhost:8788/callback';
+export const WEB_ORIGIN = 'https://pw.example.com';
+export const WEB_REDIRECT_URI = `${WEB_ORIGIN}/callback`;
 
 // テスト用の偽の設定値
 export const TEST_ENV = {
@@ -19,7 +21,8 @@ export const TEST_ENV = {
   DISCORD_BOT_TOKEN: 'test-bot-token-not-real',
   DISCORD_GUILD_ID: '200000000000000002',
   DISCORD_ROLE_ID: '300000000000000003',
-  DISCORD_REDIRECT_URIS: `${EXTENSION_REDIRECT_URI},${LOCAL_REDIRECT_URI}`,
+  DISCORD_REDIRECT_URIS: `${EXTENSION_REDIRECT_URI},${LOCAL_REDIRECT_URI},${WEB_REDIRECT_URI}`,
+  WEB_ORIGIN,
   TOTP_ENCRYPTION_KEY: toBase64Url(new Uint8Array(32).fill(7)),
 };
 

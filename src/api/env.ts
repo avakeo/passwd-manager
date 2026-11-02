@@ -9,6 +9,9 @@ export type Bindings = DiscordConfig & {
   DB: D1Database;
   DISCORD_REDIRECT_URIS: string; // 受け付ける redirect_uri をカンマで区切ったもの（A-13）
   TOTP_ENCRYPTION_KEY: string; // base64url の32バイト（シークレット）
+  // Web ページのオリジン（2026-11-01 追記）。CORS で許可するのはこれ1つだけ。redirect_uri がこのオリジンなら Web 用のセッションにする。
+  // 実際のドメインはリポジトリに書かず、wrangler.toml の vars に置く。なければ CORS はどこも許可しない
+  WEB_ORIGIN?: string;
 };
 
 export type Env = { Bindings: Bindings; Variables: { principal: Principal } };

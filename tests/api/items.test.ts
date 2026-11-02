@@ -233,19 +233,7 @@ test('A-05 A-06 トークンなし、知らないトークン、期限切れ、�
   assert.equal((await t.request('GET', '/v1/items?after=0', alice.token)).status, 200);
 });
 
-test('W-01 W-02 CORS は https://pw.example.com だけを許可する', async () => {
-  const t = setup();
-  const pre = (origin: string) =>
-    t.app.request(
-      '/v1/items',
-      { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' } },
-      { DB: t.db },
-    );
-  assert.equal((await pre('https://pw.example.com')).headers.get('access-control-allow-origin'), 'https://pw.example.com');
-  for (const origin of ['https://evil.example.com', 'https://pw.example.com.evil.test', 'http://pw.example.com']) {
-    assert.equal((await pre(origin)).headers.get('access-control-allow-origin'), null, origin);
-  }
-});
+// W-01・W-02（CORS）は、Web ページのオリジンを設定から読むようにしたので tests/api/web.test.ts に移した（2026-11-01）
 
 test('S-02 0003 を当てる前からある行（ふつうの行と削除した行）も、移行の後に after=0 の差分同期で取れる（2b Codex #4）', async () => {
   const t = setup({

@@ -18,4 +18,7 @@ DISCORD_CLIENT_ID = "<Discord のアプリの Client ID>"
 DISCORD_GUILD_ID = "<チームのサーバー ID>"
 DISCORD_ROLE_ID = "<ログインを許すロールの ID>"
 # 受け付ける redirect_uri をカンマで区切る。手動確認が終われば localhost は消す
-DISCORD_REDIRECT_URIS = "https://<拡張機能の ID>.chromiumapp.org/,http://localhost:8788/callback"
+DISCORD_REDIRECT_URIS = "https://<拡張機能の ID>.chromiumapp.org/,http://localhost:8788/callback,https://<Web ページのオリジン>/callback"
+# Web ページのオリジン（2026-11-01 追記）。CORS で許可するのはこれ1つだけ。末尾のスラッシュは付けない。
+# 例：https://teampw-web.<自分のサブドメイン>.workers.dev。なければ CORS はどこも許可せず、Web 用のログインもできない
+WEB_ORIGIN = "https://<Web ページのオリジン>"
