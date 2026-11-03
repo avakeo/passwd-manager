@@ -84,12 +84,15 @@ export function createAutofill(ctx: Context, readItem: (id: string) => Promise<{
     // パスワードか、カスタム項目の1つをコピーする（カスタム項目は自動入力に使わず、コピーだけ）
     async copyToClipboard(m) {
       if (locked()) throw new Fail('LOCKED');
+      const epoch = state.lockEpoch;
       const { item } = await readItem(String(m.id));
       if (item.type !== 'login') throw new Fail('NOT_LOGIN');
       const text = m.field === 'password' ? item.password : item.customFields[Number(m.customIndex)]?.value;
       if (typeof text !== 'string') throw new Fail('NOT_FOUND');
       if (text === '') throw new Fail('EMPTY');
       await ensureOffscreen();
+      // 準備を待っている間にロックや放置の時間切れがあれば、平文を送らない（Codex #3）。確かめた後は await を挟まずに送る
+      if (!(await stillCurrent(epoch))) throw new Fail('LOCKED');
       const reply = (await chrome.runtime.sendMessage({ target: OFFSCREEN_TARGET, type: 'copy', text }).catch(() => null)) as { ok?: unknown } | null;
       if (reply?.ok !== true) throw new Fail('CLIPBOARD');
       return { ok: true, clearsAfterSeconds: 60 };

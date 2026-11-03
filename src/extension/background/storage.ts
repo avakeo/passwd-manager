@@ -21,7 +21,7 @@ export function chromeTrustStorage(area: StorageArea): TrustStorage {
 }
 
 // 管理者の端末の、照合済みの公開鍵（メンバー ID ごとに鍵 ID と公開鍵の組）
-export function chromePinStore(area: StorageArea, apiOrigin: string, adminId: string): PinStore {
+export function chromePinStore(area: StorageArea, apiOrigin: string, adminId: string): PinStore & { remove(memberId: string): Promise<void> } {
   const keyOf = (memberId: string) => `teampw/v1/pins|${apiOrigin}|${adminId}|${memberId}`;
   return {
     async get(memberId) {
@@ -37,6 +37,10 @@ export function chromePinStore(area: StorageArea, apiOrigin: string, adminId: st
     },
     async set(memberId: string, key: PinnedKey) {
       await area.set({ [keyOf(memberId)]: JSON.stringify({ keyId: key.keyId, publicKey: toBase64Url(key.publicKey) }) });
+    },
+    // 削除したメンバーの固定を消す。サーバーがその人を有効に戻しても、照合し直すまでグラントを作らない（DeepSeek #3）
+    async remove(memberId: string) {
+      await area.remove(keyOf(memberId));
     },
   };
 }

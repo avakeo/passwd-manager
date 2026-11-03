@@ -92,8 +92,9 @@ export const ROWS: Row[] = [
   // 中身は空（400）。許可のマスでは 401・403 にならないことだけを見る
   { name: 'PUT /v1/me/keys', method: 'PUT', path: () => '/v1/me/keys', body: () => ({}), expect: cells(401, 401, 403, 403, 403, 'ok', 'ok', 'ok', 403, 403) },
   { name: 'POST /v1/vault/init', method: 'POST', path: () => '/v1/vault/init', body: () => ({}), expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
-  { name: 'GET /v1/vault', method: 'GET', path: () => '/v1/vault', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 'ok') },
-  { name: 'GET /v1/items', method: 'GET', path: () => '/v1/items?after=0', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 'ok') },
+  // Web 用は、Web ページが使う4つの GET（/v1/me、/v1/me/sessions、/v1/members、/v1/audit-logs）だけ（2026-11-03 追記、DeepSeek #5）
+  { name: 'GET /v1/vault', method: 'GET', path: () => '/v1/vault', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403) },
+  { name: 'GET /v1/items', method: 'GET', path: () => '/v1/items?after=0', expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403) },
   {
     name: 'POST /v1/items',
     method: 'POST',

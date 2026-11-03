@@ -209,10 +209,12 @@ test('Z-06 削除済みのメンバーの操作は 403', async () => {
   await expectProblem(await t.request('GET', '/v1/vault', removed.token), 403);
 });
 
-test('Z-07 Web ページ用（読み取り専用）のトークンで書き込むと 403', async () => {
+test('Z-07 Web ページ用（読み取り専用）のトークンで書き込むと 403。読めるのも Web ページが使う GET だけ（DeepSeek #5）', async () => {
   const t = setup();
   const web = await t.addMember('active', { scope: 'web' });
-  assert.equal((await t.request('GET', '/v1/items?after=0', web.token)).status, 200);
+  assert.equal((await t.request('GET', '/v1/members', web.token)).status, 200);
+  for (const path of ['/v1/items?after=0', '/v1/vault', `/v1/items/${ITEM_ID}`]) assert.equal((await t.request('GET', path, web.token)).status, 403, path);
+  assert.equal((await t.request('HEAD', '/v1/items?after=0', web.token)).status, 403);
   await expectProblem(
     await t.request('POST', '/v1/items', web.token, { id: ITEM_ID, vault_key_version: 1, ciphertext: fakeCiphertext() }),
     403,
@@ -252,4 +254,19 @@ test('S-02 0003 を当てる前からある行（ふつうの行と削除した�
     [['item_AAAAAAAAAAAAAAAAAAAAAA', false, 7], ['item_BBBBBBBBBBBBBBBBBBBBBB', true, 7]],
     '前からある行は、移行のときの Vault リビジョンになる',
   );
+});
+
+// 2026-11-03 追記（Codex #4）：世代を確かめてから書き込むまでの間にローテーションが入っても、古い世代の行を入れない
+test('S-07 世代を確かめた後、書き込みの直前にローテーションが入ったら、作成は 409。古い世代の行を入れない', async () => {
+  const t = setup();
+  const alice = await t.addMember('active');
+  const before = t.vaultRevision();
+  t.db.beforeBatch = async () => {
+    t.db.beforeBatch = null;
+    t.db.db.prepare('UPDATE vault_meta SET current_vault_key_version = 2 WHERE id = 1').run();
+  };
+  const res = await t.request('POST', '/v1/items', alice.token, { id: 'item_AAAAAAAAAAAAAAAAAAAAAA', vault_key_version: 1, ciphertext: fakeCiphertext() });
+  assert.equal(res.status, 409);
+  assert.equal(Number(t.db.db.prepare('SELECT COUNT(*) AS n FROM items').get()!.n), 0);
+  assert.equal(t.vaultRevision(), before);
 });

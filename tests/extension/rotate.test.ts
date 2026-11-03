@@ -78,6 +78,32 @@ test('S-06 削除したメンバーは、ローテーションの後に新しい
   assert.equal((await send(m, { type: 'sync' })).ok, false);
 });
 
+test('S-06 削除した後にサーバーがそのメンバーを有効に戻しても、管理者の端末は固定を消しているので、新しい世代の鍵を包まない（DeepSeek #3）', async () => {
+  const { w, memberId } = await team();
+  assert.equal((await send(w, { type: 'removeMember', memberId })).ok, true);
+  // 悪意あるサーバー：削除を取り消したように見せる
+  w.t.db.db.prepare(`UPDATE members SET status = 'active' WHERE id = ?`).run(memberId);
+  w.t.db.db.prepare(`UPDATE member_keys SET status = 'active' WHERE member_id = ?`).run(memberId);
+  assert.equal(((await send(w, { type: 'listMembers' })).members as { id: string; pinned: boolean }[]).find((x) => x.id === memberId)!.pinned, false);
+  assert.deepEqual(await send(w, { type: 'rotateVault' }), { ok: false, error: 'NOT_PINNED' });
+  assert.equal(w.calls.filter((c) => c === 'POST /v1/vault/rotate').length, 0);
+});
+
+test('ローテーションの取得でサーバーがアイテムを隠したら、端末の一覧と比べて止める（DeepSeek #4）', async () => {
+  const { w } = await team();
+  w.rewrite = async (call, res) => {
+    if (call !== 'GET /v1/items') return null;
+    const body = (await res.json()) as { items: { id: string }[] };
+    body.items = body.items.slice(1);
+    return new Response(JSON.stringify(body), { status: res.status, headers: { 'content-type': 'application/json' } });
+  };
+  assert.deepEqual(await send(w, { type: 'rotateVault' }), { ok: false, error: 'ITEMS_MISSING' });
+  assert.equal(w.calls.filter((c) => c === 'POST /v1/vault/rotate').length, 0);
+  assert.equal(Number(w.t.db.db.prepare('SELECT current_vault_key_version AS v FROM vault_meta').get()!.v), 1);
+  w.rewrite = null;
+  assert.deepEqual(await send(w, { type: 'rotateVault' }), { ok: true, vaultKeyVersion: 2, items: 3 });
+});
+
 test('S-07 管理者が取得した後に、メンバーがアイテムを書き換えたら 409。何も変わらず、やり直せば通る', async () => {
   const { w, m } = await team();
   const gate = hold(w, 'POST /v1/vault/rotate');

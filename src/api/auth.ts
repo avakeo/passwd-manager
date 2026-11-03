@@ -70,6 +70,9 @@ const PENDING_ROUTES = new Set([
   'POST /v1/me/devices', // この端末を覚える（2026-10-29 追記）
 ]);
 
+// Web ページ用のトークンで使える入口。Web ページが呼ぶ4つの GET だけ（2026-11-03 追記、DeepSeek #5。src/web/page/web-client.ts の ALLOWED_PATHS と同じ）
+const WEB_ROUTES = new Set(['GET /v1/me', 'GET /v1/me/sessions', 'GET /v1/members', 'GET /v1/audit-logs']);
+
 // TOTP は全員必須。登録していない人が使える入口。管理操作だけでなく、読み書きも GET /v1/me もできない（A-11）
 const TOTP_SETUP_ROUTES = new Set(['POST /v1/me/totp', 'POST /v1/me/totp/confirm', 'POST /v1/auth/logout']);
 
@@ -85,8 +88,8 @@ export function authorize(p: Principal, method: string, path: string): void {
   const key = routeKey(method, path);
   // D1 で承認済み（active）でなければ、削除済みは 403（Z-06）
   if (p.status === 'removed') throw new HttpProblem(403);
-  // Web ページ用のトークンは読み取り専用（Z-07）
-  if (p.scope === 'web' && method !== 'GET' && method !== 'HEAD') throw new HttpProblem(403);
+  // Web ページ用のトークンは読み取り専用（Z-07）。読めるのも、Web ページが使う入口だけ
+  if (p.scope === 'web' && !WEB_ROUTES.has(key)) throw new HttpProblem(403);
   // セッションではなくメンバーの状態で決める（登録前に発行したセッションでも、登録すれば使える）
   if (!p.hasTotp && !TOTP_SETUP_ROUTES.has(key)) throw new HttpProblem(403);
   // 承認待ちは、決めた入口だけ（Z-01）
