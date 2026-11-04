@@ -9,6 +9,7 @@ import { createGrant, type GrantSigner } from '../../src/crypto/grant.ts';
 import { MemoryPinStore, pinPublicKey } from '../../src/crypto/public-key.ts';
 import { pinSigner } from '../../src/crypto/signer.ts';
 import { generateVaultKeyRaw } from '../../src/crypto/vault-key.ts';
+import { newId } from '../../src/crypto/random.ts';
 import { newTrust } from '../helpers/trust.ts';
 import { fakeCiphertext, setup } from '../helpers/api.ts';
 import { grantBody, insertKey } from '../helpers/vault-admin.ts';
@@ -62,7 +63,7 @@ async function world() {
       ...overrides,
     };
   };
-  return { t, admin, c, d, body, grantFor };
+  return { t, admin, c, d, body, grantFor, pins, signer, people };
 }
 
 function snapshot(t: Setup) {
@@ -189,4 +190,27 @@ test('A-10 Z-02 ローテーションは、5分以内に TOTP を確かめた管
   const b = await body();
   assert.equal((await rotate(t, c.token, b)).status, 403);
   assert.equal((await rotate(t, stale.token, b)).status, 403);
+});
+
+// 2026-11-03 追記（Codex #5）：宛先の数によらず、1回の呼び出しの D1 のクエリは50まで（仕様書「無料プランの制約とクエリの抑え方」）
+test('S-05 宛先が50人いても、ローテーションの1回の呼び出しで D1 のクエリは50を超えない', async () => {
+  const { t, admin, c, body, pins, signer } = await world();
+  const grants = [];
+  for (let i = 0; i < 48; i += 1) {
+    const m = await t.addMember('active');
+    // 鍵の生成（PBKDF2）は重いので、C さんの公開鍵を別の鍵 ID で使い回す。サーバーは鍵 ID と公開鍵の組で署名を確かめる
+    const rec = { ...cKey.record, keyId: newId('key') };
+    insertKey(t, m.id, rec);
+    await pinPublicKey(pins, m.id, { keyId: rec.keyId, publicKey: rec.publicKey });
+    grants.push(grantBody(await createGrant({ pins, signer, memberId: m.id, recipient: { keyId: rec.keyId, publicKey: rec.publicKey }, vaultKeyVersion: 2, vaultKeyRaw: v2 as never })));
+  }
+  const b = await body();
+  b.grants.push(...grants);
+  assert.equal(b.grants.length, 50);
+  const before = t.db.queries;
+  const res = await rotate(t, admin.token, b);
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.ok(t.db.queries - before <= 50, `クエリは ${t.db.queries - before} 個`);
+  assert.equal(Number(t.db.db.prepare('SELECT COUNT(*) AS n FROM vault_key_grants WHERE vault_key_version = 2').get()!.n), 50);
+  void c;
 });

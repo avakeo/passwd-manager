@@ -124,7 +124,7 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 
 テスト名には、仕様書のテスト ID を入れている。
 
-**結果（2026-11-02、main）：`npm test` 635件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功。**
+**結果（2026-11-03、fix/review-3-5-4-web）：`npm test` 649件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功。**
 
 仕様書のテスト ID は113個ある。自動テストがないのは次の2つだけ。
 
@@ -166,7 +166,7 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 
 作った会社と別の会社のモデルにレビューさせ、観点も分けている。同じ癖を持つモデルは、同じ所を見落としやすいため。レビュー役はコードを直さず、指摘を文章で返す。
 
-Codex と DeepSeek のレビューは、手順5・6、フェーズ0、1、2a、2b、client-parts で行った。フェーズ3・4・5と Web ページ（PR #12〜#18）のレビューは、まだ依頼していない。レビュー資料と判定は [docs/review/](docs/review/) にある。
+Codex と DeepSeek のレビューは、手順5・6、フェーズ0、1、2a、2b、client-parts、フェーズ3・4・5と Web ページ（PR #12〜#18）で行った。フェーズ3・4・5と Web ページの14件の指摘は、すべて採用して直した（[docs/review/phase-3-5-4-web.md](docs/review/phase-3-5-4-web.md)）。レビュー資料と判定は [docs/review/](docs/review/) にある。
 
 ## まだ作っていないもの
 

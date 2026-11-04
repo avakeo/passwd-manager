@@ -57,9 +57,15 @@ export function registerRotateRoutes(app: Hono<Env>): void {
       .bind(p.memberId)
       .first<{ id: string; ecdsa_public_key: string }>();
     if (!signer) throw new HttpProblem(409);
+    // 宛先の鍵は json_each の1文でまとめて取る。宛先の数によらず、1回の呼び出しのクエリを50までに抑える（Codex #5）
+    const recipientRows = await db
+      .prepare(`SELECT k.id, k.member_id, k.ecdh_public_key FROM json_each(?) j JOIN member_keys k ON k.id = j.value`)
+      .bind(JSON.stringify(grants.map((g) => g.recipientKeyId)))
+      .all<{ id: string; member_id: string; ecdh_public_key: string }>();
+    const recipientKeys = new Map(recipientRows.results.map((r) => [r.id, r]));
     for (const g of grants) {
       if (g.signerKeyId !== signer.id) throw new HttpProblem(400);
-      const r = await db.prepare('SELECT member_id, ecdh_public_key FROM member_keys WHERE id = ?').bind(g.recipientKeyId).first<{ member_id: string; ecdh_public_key: string }>();
+      const r = recipientKeys.get(g.recipientKeyId);
       if (!r) throw new HttpProblem(409);
       await verifyGrantSignature(g, { memberId: p.memberId, ecdsaPublicKey: signer.ecdsa_public_key }, { memberId: r.member_id, ecdhPublicKey: r.ecdh_public_key });
     }

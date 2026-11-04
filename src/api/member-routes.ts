@@ -88,6 +88,8 @@ export function registerMemberRoutes(app: Hono<Env>): void {
           )
           .bind(g.vaultKeyVersion, g.recipientKeyId, g.ephemeralPublicKey, g.wrappedKey, g.signerKeyId, g.signature, FORMAT_V1, now),
         db.prepare(`UPDATE members SET status = 'active', approved_by = ?, approved_at = ? WHERE id = ?`).bind(p.memberId, now, id),
+        // 承認のたびに Vault リビジョンを1増やす（仕様書「D1テーブル設計 > vault_meta」。Codex #6）
+        db.prepare('UPDATE vault_meta SET vault_revision = vault_revision + 1 WHERE id = 1'),
         db.prepare('DELETE FROM rotation_guard'),
         db.prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) VALUES (?, 'member.approve', 'member', ?, ?)`).bind(p.memberId, id, now),
       ]);
@@ -109,7 +111,8 @@ export function registerMemberRoutes(app: Hono<Env>): void {
     const now = Date.now();
     const [res] = await db.batch([
       db.prepare(`UPDATE members SET status = 'removed', removed_at = ? WHERE id = ? AND status != 'removed'`).bind(now, id),
-      // 直前の文が1行を変えたときだけ書く
+      // 直前の文が1行を変えたときだけ、Vault リビジョンを1増やし（Codex #6）、監査ログを書く
+      db.prepare('UPDATE vault_meta SET vault_revision = vault_revision + 1 WHERE id = 1 AND changes() = 1'),
       db.prepare(`INSERT INTO audit_logs (actor_member_id, action, target_type, target_id, created_at) SELECT ?, 'member.remove', 'member', ?, ? WHERE changes() = 1`).bind(p.memberId, id, now),
       db.prepare('UPDATE sessions SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL').bind(now, id),
       db.prepare('UPDATE remembered_devices SET revoked_at = ? WHERE member_id = ? AND revoked_at IS NULL').bind(now, id),

@@ -169,3 +169,17 @@ test('監査ログ：新しい順に、操作した人・操作・対象・時�
   assert.deepEqual(logs.slice(0, 2).map((l) => l.action), ['member.remove', 'member.approve']);
   assert.deepEqual(Object.keys(logs[0]!).sort(), ['action', 'actor_member_id', 'created_at', 'target_id', 'target_type']);
 });
+
+// 2026-11-03 追記（Codex #6）：仕様書「D1テーブル設計 > vault_meta」のとおり、承認と削除のたびに Vault リビジョンを1増やす
+test('S-08 承認と削除は、それぞれ Vault リビジョンを1増やす。断った承認と、削除済みの人の削除は増やさない', async () => {
+  const { t, admin, c, forC } = await world();
+  const r0 = t.vaultRevision();
+  assert.equal((await t.request('POST', `/v1/members/${c.id}/approve`, admin.token, {})).status, 400);
+  assert.equal(t.vaultRevision(), r0);
+  assert.equal((await t.request('POST', `/v1/members/${c.id}/approve`, admin.token, await forC())).status, 200);
+  assert.equal(t.vaultRevision(), r0 + 1);
+  assert.equal((await t.request('DELETE', `/v1/members/${c.id}`, admin.token)).status, 204);
+  assert.equal(t.vaultRevision(), r0 + 2);
+  assert.equal((await t.request('DELETE', `/v1/members/${c.id}`, admin.token)).status, 404);
+  assert.equal(t.vaultRevision(), r0 + 2);
+});

@@ -148,3 +148,39 @@ test('A-19 ログアウト、セッションの無効化、7日の期限、削�
   assert.equal((await resume(t, 'A'.repeat(43), await proof('2580'))).status, 403);
   assert.equal((await t.request('POST', '/v1/auth/resume', undefined, { device_token: 'x', pin_proof: await proof('2580') })).status, 400);
 });
+
+// 2026-11-03 追記（Codex #7）：正しいパスコードの確認から保存までの間に端末が無効になったら、トークンを発行しない
+test('A-18 正しいパスコードの処理が保存の直前で止まっている間に、間違いで端末が無効になったら、再開しても 403。トークンを発行しない', async () => {
+  const t = setup();
+  const { deviceToken } = await remembered(t);
+  let arrive!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>((r) => (arrive = r));
+  const released = new Promise<void>((r) => (release = r));
+  t.db.beforeBatch = async () => {
+    t.db.beforeBatch = null;
+    arrive();
+    await released;
+  };
+  const pending = resume(t, deviceToken, await proof('2580'));
+  await arrived;
+  assert.equal((await resume(t, deviceToken, await proof('0000'))).status, 401);
+  assert.equal((await resume(t, deviceToken, await proof('0000'))).status, 403, '3回目で無効になる');
+  release();
+  const res = await pending;
+  assert.equal(res.status, 403);
+  assert.notEqual(t.db.db.prepare('SELECT revoked_at FROM remembered_devices').get()!.revoked_at, null);
+});
+
+// 2026-11-03 追記（Codex #8）：仕様書「D1テーブル設計 > remembered_devices」の、1つのセッションに1行
+test('A-16 1つのセッションに覚えた端末は1行だけ（session_id の一意制約）', async () => {
+  const t = setup();
+  const { m } = await remembered(t);
+  const row = t.db.db.prepare('SELECT * FROM remembered_devices WHERE member_id = ?').get(m.id) as Record<string, unknown>;
+  const copy = { ...row, id: 'dev_' + 'B'.repeat(22), token_hash: 'f'.repeat(64) };
+  const cols = Object.keys(copy);
+  assert.throws(
+    () => t.db.db.prepare(`INSERT INTO remembered_devices (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...(cols.map((c) => copy[c as keyof typeof copy]) as never[])),
+    /UNIQUE/,
+  );
+});

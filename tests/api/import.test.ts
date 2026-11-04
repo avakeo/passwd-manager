@@ -99,3 +99,15 @@ test('I-01 ほかの入口の本文の上限は、今までどおり（POST /v1/
   const res = await t.request('POST', '/v1/items', alice.token, { id: ids(1)[0], vault_key_version: 1, ciphertext: 'A'.repeat(1_000_000) });
   await status(res, 413);
 });
+
+// 2026-11-03 追記（Codex #4）：世代を確かめてから書き込むまでの間にローテーションが入っても、古い世代の行を入れない
+test('S-07 M-04 世代を確かめた後、書き込みの直前にローテーションが入ったら 409。古い世代の行を入れない', async () => {
+  const t = setup();
+  const alice = await t.addMember('active');
+  t.db.beforeBatch = async () => {
+    t.db.beforeBatch = null;
+    t.db.db.prepare('UPDATE vault_meta SET current_vault_key_version = 2 WHERE id = 1').run();
+  };
+  await status(await t.request('POST', '/v1/items/import', alice.token, body(ids(3))), 409);
+  assert.equal(count(t), 0);
+});

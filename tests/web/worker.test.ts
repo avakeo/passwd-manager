@@ -7,6 +7,18 @@ import worker from '../../src/web/worker.ts';
 
 const API_ORIGIN = 'https://pw-api.example.com';
 
+// 2026-11-03 追記（Codex #9）：転送と設定エラーの応答にも同じヘッダーを付ける。connect-src は渡した値
+function assertSecurityHeaders(res: Response, connect: string, label: string) {
+  const csp = res.headers.get('content-security-policy') ?? '';
+  for (const part of ["default-src 'none'", "script-src 'self'", "style-src 'self'", `connect-src ${connect}`, "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]) {
+    assert.ok(csp.split('; ').includes(part), `${label}: ${part}`);
+  }
+  assert.ok(!csp.includes("'unsafe-inline'") && !csp.includes('*'), label);
+  for (const name of ['strict-transport-security', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'cross-origin-opener-policy', 'permissions-policy']) {
+    assert.ok(res.headers.get(name), `${label}: ${name}`);
+  }
+}
+
 function env(files: Record<string, string> = { '/index.html': '<!doctype html><title>teampw</title>' }, apiOrigin: string = API_ORIGIN) {
   const seen: string[] = [];
   return {
@@ -52,6 +64,7 @@ test('W-04 http で来たら、アセットを返さずに同じパスの https 
   assert.equal(res.status, 301);
   assert.equal(res.headers.get('location'), 'https://pw.example.com/callback?code=abc');
   assert.deepEqual(seen, []);
+  assertSecurityHeaders(res, API_ORIGIN, '301');
 });
 
 test('W-03 API のオリジンの設定がおかしければ、ページを返さない（CSP を緩めて返さない）', async () => {
@@ -60,5 +73,7 @@ test('W-03 API のオリジンの設定がおかしければ、ページを返�
     const res = await worker.fetch(new Request('https://pw.example.com/'), e);
     assert.equal(res.status, 500, bad);
     assert.deepEqual(seen, [], bad);
+    // API のオリジンが使えないので、どこにもつながせない
+    assertSecurityHeaders(res, "'none'", `500 ${bad}`);
   }
 });

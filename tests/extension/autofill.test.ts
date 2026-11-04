@@ -3,7 +3,7 @@
 
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { POPUP, PAGE, adminReady, newDiscord, send, world, type World } from '../helpers/extension-world.ts';
+import { POPUP, PAGE, adminReady, holdResult, newDiscord, send, world, type World } from '../helpers/extension-world.ts';
 
 const T0 = 1_800_000_000_000;
 mock.timers.enable({ apis: ['Date'], now: T0 });
@@ -153,6 +153,21 @@ test('E-11 ロック中は、自動入力もコピーも断り、何も注入し
   assert.deepEqual(await send(w, { type: 'autofill', id, tabId: TAB }, POPUP), { ok: false, error: 'LOCKED' });
   assert.deepEqual(await send(w, { type: 'copyToClipboard', id, field: 'password' }, POPUP), { ok: false, error: 'LOCKED' });
   assert.equal(w.chrome.injections.length, 0);
+  assert.equal(w.chrome.sentToOffscreen.length, 0);
+});
+
+test('E-11 コピーの準備（オフスクリーンドキュメント）を待っている間にロックしたら、平文を送らない（Codex #3）', async () => {
+  const { w, id } = await ready();
+  const gate = holdResult(w.chrome.offscreen, 'hasDocument');
+  try {
+    const pending = send(w, { type: 'copyToClipboard', id, field: 'password' }, POPUP);
+    await gate.arrived;
+    assert.equal((await send(w, { type: 'lock' })).ok, true);
+    gate.release();
+    assert.deepEqual(await pending, { ok: false, error: 'LOCKED' });
+  } finally {
+    gate.restore();
+  }
   assert.equal(w.chrome.sentToOffscreen.length, 0);
 });
 

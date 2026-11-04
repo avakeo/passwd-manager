@@ -136,13 +136,16 @@ export function registerDeviceRoutes(app: Hono<Env>): void {
     const refreshToken = newToken();
     const deviceToken = newToken();
     const results = await db.batch([
-      // 同じセッションのトークンを新しくする。TOTP を確かめた扱いは外す
+      // 同じセッションのトークンを新しくする。TOTP を確かめた扱いは外す。
+      // 確かめてから保存するまでの間に、端末が無効になった・期限が切れた・トークンが替わった・削除された場合は何も変えない（Codex #7）
       db
         .prepare(
           `UPDATE sessions SET access_token_hash = ?, refresh_token_hash = ?, expires_at = ?, last_used_at = ?, totp_verified_at = NULL
-            WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL`,
+            WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL
+              AND EXISTS (SELECT 1 FROM remembered_devices WHERE id = ? AND token_hash = ? AND revoked_at IS NULL AND expires_at > ?)
+              AND EXISTS (SELECT 1 FROM members WHERE id = ? AND status != 'removed')`,
         )
-        .bind(await sha256Hex(accessToken), await sha256Hex(refreshToken), now + ACCESS_TOKEN_TTL_MS, now, d.session_id, d.refresh_token_hash),
+        .bind(await sha256Hex(accessToken), await sha256Hex(refreshToken), now + ACCESS_TOKEN_TTL_MS, now, d.session_id, d.refresh_token_hash, d.id, tokenHash, now, d.member_id),
       // ブラウザを閉じて消えたはずの前のリフレッシュトークンが使われたら、セッションごと無効にする（A-12 と同じ）
       db.prepare('INSERT INTO used_refresh_tokens (token_hash, session_id, expires_at) SELECT ?, ?, ? WHERE changes() = 1').bind(d.refresh_token_hash, d.session_id, Number(d.refresh_expires_at)),
       // 端末のトークンも替え、回数を戻す

@@ -5,7 +5,7 @@
 import { after, beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDLE_LOCK_MS } from '../../src/extension/background/background.ts';
-import { ADMIN_PASSWORD, POPUP, adminReady, newDiscord, restart, send, world, type World } from '../helpers/extension-world.ts';
+import { ADMIN_PASSWORD, POPUP, adminReady, holdResult, newDiscord, restart, send, world, type World } from '../helpers/extension-world.ts';
 import { referenceTotp, stepAt } from '../helpers/totp-reference.ts';
 import { fromBase64Url } from '../../src/crypto/bytes.ts';
 
@@ -89,6 +89,53 @@ test('E-20 ロックを押すと保存が消え、止まった後は戻らない
   const w = await kept();
   await send(w, { type: 'lock' }, POPUP);
   assert.equal(sessionRecord(w), undefined);
+  await stop(w);
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
+});
+
+test('E-20 止まった後に戻る途中（保存を読んでいる間）にロックしたら、消した保存から鍵を戻さない（Codex #1）', async () => {
+  const w = await kept();
+  await stop(w);
+  const gate = holdResult(w.chrome.storage.session, 'get', (args) => typeof args[0] === 'string' && args[0].startsWith(SESSION_PREFIX));
+  try {
+    const pending = send(w, { type: 'status' }, POPUP);
+    await gate.arrived;
+    assert.equal((await send(w, { type: 'lock' })).ok, true);
+    gate.release();
+    await pending;
+  } finally {
+    gate.restore();
+  }
+  assert.deepEqual(w.bg.memoryState(), { unlocked: false, vaultKey: false });
+  assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
+});
+
+test('E-20 オンにする途中（保存を書く前）にロックしたら、保存を残さない（Codex #2）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  // storage.session への Vault 鍵の書き込みを、書く前に止める
+  const area = w.chrome.storage.session;
+  const original = area.set.bind(area);
+  let arrive!: () => void;
+  let release!: () => void;
+  const arrived = new Promise<void>((r) => (arrive = r));
+  const released = new Promise<void>((r) => (release = r));
+  let held = false;
+  area.set = async (items: Record<string, unknown>) => {
+    if (!held && Object.keys(items).some((k) => k.startsWith(SESSION_PREFIX))) {
+      held = true;
+      arrive();
+      await released;
+    }
+    return original(items);
+  };
+  const pending = send(w, { type: 'setKeepUnlocked', enabled: true });
+  await arrived;
+  assert.equal((await send(w, { type: 'lock' })).ok, true);
+  release();
+  const r = await pending;
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(sessionRecord(w), undefined, 'ロックの後に書き戻さない');
   await stop(w);
   assert.equal((await send(w, { type: 'status' }, POPUP)).locked, true);
 });
