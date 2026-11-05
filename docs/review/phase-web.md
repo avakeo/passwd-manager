@@ -55,7 +55,7 @@
 
 | 項目 | 確かめ方 |
 |---|---|
-| 設定 | wrangler.web.example.toml を wrangler.web.toml に、web.config.example.json を web.config.local.json に写して値を書く。API の wrangler.toml に WEB_ORIGIN と、DISCORD_REDIRECT_URIS に `<WEB_ORIGIN>/callback` を足す。Discord のアプリの OAuth2 の Redirects にも同じ戻り先を足す |
+| 設定 | wrangler.web.example.toml を wrangler.web.toml に、config/web.example.json を config/web.local.json に写して値を書く（2026-11-05 に config/ へ移した。元は web.config.example.json と web.config.local.json）。API の wrangler.toml に WEB_ORIGIN と、DISCORD_REDIRECT_URIS に `<WEB_ORIGIN>/callback` を足す。Discord のアプリの OAuth2 の Redirects にも同じ戻り先を足す |
 | デプロイ | `npx wrangler deploy`（API）、`npm run build:web`、`npx wrangler deploy -c wrangler.web.toml` |
 | ログイン | Web ページで「Discord でログイン」→ TOTP のコード → メンバー、自分のセッション、監査ログ（管理者）が出る。アドレスバーに認可コードが残らない |
 | ヘッダー | ブラウザの開発者ツールで、応答のヘッダーと、コンソールに CSP の違反がないこと |

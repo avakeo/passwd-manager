@@ -43,3 +43,9 @@ test('HTML として解釈しない：Web ページのコードに innerHTML・o
   const html = readFileSync(new URL('page/index.html', root), 'utf8');
   assert.ok(!/<script(?![^>]*\bsrc=)/.test(html) && !/<style|\sstyle=|\son[a-z]+=/i.test(html));
 });
+
+test('設定の置き場所：例の設定は config/web.example.json にあり、設定の確認に通る。手元の config/web.local.json は Git の管理外', () => {
+  const example = JSON.parse(readFileSync(new URL('../../config/web.example.json', import.meta.url), 'utf8')) as typeof CONFIG;
+  checkWebConfig(example);
+  assert.match(readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8'), /^config\/\*\.local\.json$/m);
+});

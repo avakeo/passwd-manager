@@ -142,8 +142,8 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 | 作るもの | 例の設定 | 手順 |
 |---|---|---|
 | API（teampw-api） | wrangler.example.toml → wrangler.toml | [docs/実装状況.md](docs/実装状況.md) の 8.5（Discord のアプリ、D1、シークレット） |
-| 拡張機能 | extension.config.example.json → extension.config.local.json | `npm run build:extension` で dist/extension を作り、Chrome に読み込む |
-| Web ページ（teampw-web） | wrangler.web.example.toml → wrangler.web.toml、web.config.example.json → web.config.local.json | `npm run build:web` の後に `npx wrangler deploy -c wrangler.web.toml`（[docs/review/phase-web.md](docs/review/phase-web.md)） |
+| 拡張機能 | config/extension.example.json → config/extension.local.json | `npm run build:extension` で dist/extension を作り、Chrome に読み込む |
+| Web ページ（teampw-web） | wrangler.web.example.toml → wrangler.web.toml、config/web.example.json → config/web.local.json | `npm run build:web` の後に `npx wrangler deploy -c wrangler.web.toml`（[docs/review/phase-web.md](docs/review/phase-web.md)） |
 
 ## 正直に書いておく制約
 

@@ -1,6 +1,6 @@
 // 拡張機能のビルド。依存は足さず、入っている TypeScript（tsc）で JS にし、HTML・CSS・manifest を写す。
 //   npm run build:extension   → dist/extension（Chrome の「パッケージ化されていない拡張機能を読み込む」で選ぶ）
-// 設定は Git の管理外の extension.config.local.json（例：extension.config.example.json）。
+// 設定は Git の管理外の config/extension.local.json（例：config/extension.example.json）。
 //   apiOrigin：API の接続先（https のオリジン）。manifest の host_permissions と、出力の config.js に入る
 //   discordClientId：Discord のアプリの Client ID（秘密ではない）
 //   manifestKey：拡張機能 ID を固定する公開鍵（scripts/extension-key.ts が表示する。秘密鍵はリポジトリの外）
@@ -47,9 +47,9 @@ export async function buildExtension(opts: { outDir: URL; config: ExtensionConfi
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const path = new URL('extension.config.local.json', ROOT);
+  const path = new URL('config/extension.local.json', ROOT);
   if (!existsSync(path)) {
-    process.stderr.write('extension.config.local.json がない。extension.config.example.json を写して値を書く\n');
+    process.stderr.write('config/extension.local.json がない。config/extension.example.json を写して値を書く\n');
     process.exitCode = 1;
   } else {
     const config = JSON.parse(readFileSync(path, 'utf8')) as ExtensionConfig;
