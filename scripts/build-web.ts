@@ -1,6 +1,6 @@
 // Web ページのビルド（2026-11-01 追記、判断待ち10）。依存は足さず、入っている TypeScript（tsc）で JS にし、HTML・CSS を写す。
 //   npm run build:web   → dist/web（wrangler.web.toml の [assets] がここを配る）
-// 設定は Git の管理外の web.config.local.json（例：web.config.example.json）。
+// 設定は Git の管理外の config/web.local.json（例：config/web.example.json）。
 //   apiOrigin：API の接続先（https のオリジン）
 //   discordClientId：Discord のアプリの Client ID（秘密ではない）
 //   webOrigin：このページのオリジン。Discord から戻る先は <webOrigin>/callback
@@ -43,9 +43,9 @@ export async function buildWeb(opts: { outDir: URL; config: WebBuildConfig }): P
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const path = new URL('web.config.local.json', ROOT);
+  const path = new URL('config/web.local.json', ROOT);
   if (!existsSync(path)) {
-    process.stderr.write('web.config.local.json がない。web.config.example.json を写して値を書く\n');
+    process.stderr.write('config/web.local.json がない。config/web.example.json を写して値を書く\n');
     process.exitCode = 1;
   } else {
     const config = JSON.parse(readFileSync(path, 'utf8')) as WebBuildConfig;

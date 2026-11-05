@@ -124,9 +124,9 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 
 テスト名には、仕様書のテスト ID を入れている。
 
-**結果（2026-11-03、fix/review-3-5-4-web）：`npm test` 649件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功。**
+**結果（2026-11-05、feat/web-session-storage）：`npm test` 658件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功（2026-11-03 の結果。今回は拡張機能を変えていない）。**
 
-仕様書のテスト ID は113個ある。自動テストがないのは次の2つだけ。
+仕様書のテスト ID は114個ある（2026-11-05 に W-08 を足した）。自動テストがないのは次の2つだけ。
 
 | ID | 扱い |
 |---|---|
@@ -142,8 +142,8 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 | 作るもの | 例の設定 | 手順 |
 |---|---|---|
 | API（teampw-api） | wrangler.example.toml → wrangler.toml | [docs/実装状況.md](docs/実装状況.md) の 8.5（Discord のアプリ、D1、シークレット） |
-| 拡張機能 | extension.config.example.json → extension.config.local.json | `npm run build:extension` で dist/extension を作り、Chrome に読み込む |
-| Web ページ（teampw-web） | wrangler.web.example.toml → wrangler.web.toml、web.config.example.json → web.config.local.json | `npm run build:web` の後に `npx wrangler deploy -c wrangler.web.toml`（[docs/review/phase-web.md](docs/review/phase-web.md)） |
+| 拡張機能 | config/extension.example.json → config/extension.local.json | `npm run build:extension` で dist/extension を作り、Chrome に読み込む |
+| Web ページ（teampw-web） | wrangler.web.example.toml → wrangler.web.toml、config/web.example.json → config/web.local.json | `npm run build:web` の後に `npx wrangler deploy -c wrangler.web.toml`（[docs/review/phase-web.md](docs/review/phase-web.md)） |
 
 ## 正直に書いておく制約
 

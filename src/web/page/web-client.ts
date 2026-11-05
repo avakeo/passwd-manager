@@ -1,6 +1,9 @@
 // Web ページのログインと API の呼び出し（2026-11-01 追記、判断待ち10）。仕様書「Webページの配信」。画面（app.ts）から切り離してテストする。
 //   - ログイン：state と PKCE（S256）を作り、Discord へ移る間だけ sessionStorage に置く。戻ったら1回だけ取り出して消し、state を照合する（A-01）
-//   - TOTP を確かめた後のトークンは、このオブジェクト（ページのメモリ）だけに置く。保存しない
+//   - TOTP を確かめた後のアクセストークンは、このオブジェクト（ページのメモリ）だけに置く
+//   - リフレッシュトークンと、画面に出す自分の ID と役割だけは sessionStorage にも置き、再読み込みしたらそれで同じセッションに
+//     戻る（2026-11-05 追記、W-08）。タブを閉じれば消える。更新したら置き換え、更新に失敗したら消す。役割は表示にだけ使い、
+//     見られる範囲はサーバーが決める
 //   - 呼べるのは、決めた GET の入口だけ（Web 用のトークンは読み取り専用。Z-07）。アクセストークンが切れたら1回だけ更新する
 
 import { LoginError, createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
@@ -10,6 +13,7 @@ type KeyValue = { getItem(key: string): string | null; setItem(key: string, valu
 type Json = Record<string, unknown>;
 
 const PENDING_KEY = 'teampw/v1/web-login';
+export const SESSION_KEY = 'teampw/v1/web-session';
 const DEVICE_LABEL = 'Web ページ';
 const ALLOWED_PATHS = new Set(['/v1/me', '/v1/me/sessions', '/v1/members', '/v1/audit-logs']);
 
@@ -69,23 +73,28 @@ export async function finishLogin(href: string, config: WebConfig, storage: KeyV
   return { challengeToken: body.challenge_token };
 }
 
+export type WebMember = { id: string; role: string };
+
 export class WebSession {
   #config: WebConfig;
   #fetch: typeof fetch;
+  #storage: KeyValue;
   #access: string;
   #refresh: string;
-  readonly member: { id: string; role: string; status: string };
+  readonly member: WebMember;
 
-  private constructor(config: WebConfig, fetchFn: typeof fetch, tokens: { access: string; refresh: string }, member: { id: string; role: string; status: string }) {
+  private constructor(config: WebConfig, fetchFn: typeof fetch, storage: KeyValue, tokens: { access: string; refresh: string }, member: WebMember) {
     this.#config = config;
     this.#fetch = fetchFn;
+    this.#storage = storage;
     this.#access = tokens.access;
     this.#refresh = tokens.refresh;
     this.member = member;
+    this.#save();
   }
 
   // TOTP のコードを確かめて、セッションを受け取る
-  static async verifyTotp(config: WebConfig, fetchFn: typeof fetch, challengeToken: string, code: string): Promise<WebSession> {
+  static async verifyTotp(config: WebConfig, fetchFn: typeof fetch, storage: KeyValue, challengeToken: string, code: string): Promise<WebSession> {
     const res = await post(fetchFn, config, '/v1/auth/totp', { challenge_token: challengeToken, code });
     if (res.status === 401 || res.status === 400) throw new WebError('BAD_CODE');
     if (res.status === 403) throw new WebError('FORBIDDEN');
@@ -93,7 +102,36 @@ export class WebSession {
     const body = (await res.json()) as Json;
     const m = body.member as Json | undefined;
     if (typeof body.access_token !== 'string' || typeof body.refresh_token !== 'string' || !m || typeof m.id !== 'string') throw new WebError('SERVER');
-    return new WebSession(config, fetchFn, { access: body.access_token, refresh: body.refresh_token }, { id: m.id, role: String(m.role), status: String(m.status) });
+    return new WebSession(config, fetchFn, storage, { access: body.access_token, refresh: body.refresh_token }, { id: m.id, role: String(m.role) });
+  }
+
+  // 再読み込みの後：置いたリフレッシュトークンで更新する。戻れなければ置いた値を消して null
+  static async resume(config: WebConfig, fetchFn: typeof fetch, storage: KeyValue): Promise<WebSession | null> {
+    let refresh: string;
+    let member: WebMember;
+    try {
+      const v = JSON.parse(storage.getItem(SESSION_KEY) ?? 'null') as Json | null;
+      const m = v?.member as Json | undefined;
+      if (v === null || typeof v.refresh !== 'string' || !m || typeof m.id !== 'string' || typeof m.role !== 'string') throw new Error();
+      refresh = v.refresh;
+      member = { id: m.id, role: m.role };
+    } catch {
+      storage.removeItem(SESSION_KEY);
+      return null;
+    }
+    let tokens: { access: string; refresh: string };
+    try {
+      tokens = await renew(fetchFn, config, refresh);
+    } catch {
+      storage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return new WebSession(config, fetchFn, storage, tokens, member);
+  }
+
+  // このタブのログインを消す。サーバーのセッションは残る（ログアウトは書き込みなので、Web 用のトークンでは呼べない）
+  forget(): void {
+    this.#storage.removeItem(SESSION_KEY);
   }
 
   // 決めた GET の入口だけを呼ぶ。401 なら1回だけ更新して呼び直す
@@ -114,12 +152,28 @@ export class WebSession {
     return this.#fetch(`${this.#config.apiOrigin}${path}`, { method: 'GET', headers: { Authorization: `Bearer ${this.#access}` } });
   }
 
-  async #renew(): Promise<void> {
-    const res = await post(this.#fetch, this.#config, '/v1/auth/refresh', { refresh_token: this.#refresh });
-    if (!res.ok) throw new WebError('EXPIRED');
-    const body = (await res.json()) as Json;
-    if (typeof body.access_token !== 'string' || typeof body.refresh_token !== 'string') throw new WebError('EXPIRED');
-    this.#access = body.access_token;
-    this.#refresh = body.refresh_token;
+  #save(): void {
+    this.#storage.setItem(SESSION_KEY, JSON.stringify({ refresh: this.#refresh, member: this.member }));
   }
+
+  async #renew(): Promise<void> {
+    let tokens: { access: string; refresh: string };
+    try {
+      tokens = await renew(this.#fetch, this.#config, this.#refresh);
+    } catch (e) {
+      this.forget();
+      throw e;
+    }
+    this.#access = tokens.access;
+    this.#refresh = tokens.refresh;
+    this.#save();
+  }
+}
+
+async function renew(fetchFn: typeof fetch, config: WebConfig, refresh: string): Promise<{ access: string; refresh: string }> {
+  const res = await post(fetchFn, config, '/v1/auth/refresh', { refresh_token: refresh });
+  if (!res.ok) throw new WebError('EXPIRED');
+  const body = (await res.json()) as Json;
+  if (typeof body.access_token !== 'string' || typeof body.refresh_token !== 'string') throw new WebError('EXPIRED');
+  return { access: body.access_token, refresh: body.refresh_token };
 }

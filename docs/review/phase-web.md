@@ -55,7 +55,7 @@
 
 | 項目 | 確かめ方 |
 |---|---|
-| 設定 | wrangler.web.example.toml を wrangler.web.toml に、web.config.example.json を web.config.local.json に写して値を書く。API の wrangler.toml に WEB_ORIGIN と、DISCORD_REDIRECT_URIS に `<WEB_ORIGIN>/callback` を足す。Discord のアプリの OAuth2 の Redirects にも同じ戻り先を足す |
+| 設定 | wrangler.web.example.toml を wrangler.web.toml に、config/web.example.json を config/web.local.json に写して値を書く（2026-11-05 に config/ へ移した。元は web.config.example.json と web.config.local.json）。API の wrangler.toml に WEB_ORIGIN と、DISCORD_REDIRECT_URIS に `<WEB_ORIGIN>/callback` を足す。Discord のアプリの OAuth2 の Redirects にも同じ戻り先を足す |
 | デプロイ | `npx wrangler deploy`（API）、`npm run build:web`、`npx wrangler deploy -c wrangler.web.toml` |
 | ログイン | Web ページで「Discord でログイン」→ TOTP のコード → メンバー、自分のセッション、監査ログ（管理者）が出る。アドレスバーに認可コードが残らない |
 | ヘッダー | ブラウザの開発者ツールで、応答のヘッダーと、コンソールに CSP の違反がないこと |
@@ -63,6 +63,6 @@
 
 ## 残した課題
 
-- Web ページを閉じても、サーバーのセッション（リフレッシュは7日）は残る。トークンはページのメモリだけにあるので、閉じた後は使われない。消したいときは拡張機能で無効化する（仕様書「Webページの配信」）。
+- Web ページを閉じても、サーバーのセッション（リフレッシュは7日）は残る。トークンはページのメモリだけにあるので、閉じた後は使われない。消したいときは拡張機能で無効化する（仕様書「Webページの配信」）。2026-11-05 に、再読み込みで同じセッションに戻すため、リフレッシュトークンを sessionStorage に置くよう変えた（W-08）。タブを閉じれば消える点は同じ。
 - 監査ログの「操作した人」はメンバー ID のまま。名前に直すと読みやすいが、メンバー一覧と突き合わせるだけなので後回しにした。
 - 本番のドメインを使うときは、DNS とカスタムドメインの設定が別に要る。

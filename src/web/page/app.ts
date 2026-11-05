@@ -1,7 +1,7 @@
 // Web ページの画面（2026-11-01 追記、判断待ち10）。仕様書「画面の分担」「Webページの配信」。
 // メンバー一覧と状態、監査ログ（管理者）、自分のセッションの一覧を出すだけ。鍵は使わない。書き込みはしない。
 // 表示はすべて textContent で出す（サーバーから来た名前などを HTML として解釈しない）。
-// トークンはこのページのメモリだけ。再読み込みしたらログインし直す。
+// 再読み込みしたら、sessionStorage に置いたリフレッシュトークンで同じセッションに戻る（2026-11-05 追記、W-08）。タブを閉じれば消える。
 
 import { CONFIG } from '../config.ts';
 import { WebError, WebSession, finishLogin, startLogin } from './web-client.ts';
@@ -74,7 +74,7 @@ function showTotp(challengeToken: string): void {
     const code = input.value.trim();
     input.value = '';
     try {
-      await showDashboard(await WebSession.verifyTotp(CONFIG, fetch.bind(globalThis), challengeToken, code));
+      await showDashboard(await WebSession.verifyTotp(CONFIG, fetch.bind(globalThis), sessionStorage, challengeToken, code));
     } catch (err) {
       // 一時トークンは1回だけなので、間違えたらログインからやり直す
       showLogin(errorText(err));
@@ -85,9 +85,15 @@ function showTotp(challengeToken: string): void {
 
 async function showDashboard(session: WebSession): Promise<void> {
   const isAdmin = session.member.role === 'admin';
+  const forget = el('button', { text: 'このタブのログインを消す' });
+  forget.addEventListener('click', () => {
+    session.forget();
+    showLogin();
+  });
   root.replaceChildren(
     header(),
-    el('p', { text: `役割：${isAdmin ? '管理者' : 'メンバー'}。このページは表示だけです。再読み込みするとログアウトします。`, className: 'muted' }),
+    el('p', { text: `役割：${isAdmin ? '管理者' : 'メンバー'}。このページは表示だけです。タブを閉じるとログインが消えます。`, className: 'muted' }),
+    forget,
   );
   const part = async (title: string, load: () => Promise<HTMLElement>, onForbidden?: string) => {
     const s = el('section', {}, el('h2', { text: title }));
@@ -133,7 +139,7 @@ async function showDashboard(session: WebSession): Promise<void> {
         ]);
         return table(['日時', '操作', '操作した人', '対象'], rows);
       },
-      '監査ログは、ログインから5分の間だけ見られます。再読み込みしてログインし直してください。',
+      '監査ログは、ログインから5分の間だけ見られます。「このタブのログインを消す」を押して、ログインし直してください。',
     );
   }
 }
@@ -150,6 +156,12 @@ async function start(): Promise<void> {
       showLogin(errorText(e));
     }
     return;
+  }
+  try {
+    const session = await WebSession.resume(CONFIG, fetch.bind(globalThis), sessionStorage);
+    if (session) return await showDashboard(session);
+  } catch (e) {
+    return showLogin(errorText(e));
   }
   showLogin();
 }

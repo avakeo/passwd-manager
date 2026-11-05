@@ -7,8 +7,7 @@ node_modules/
 .env.*
 wrangler.toml
 dist/
-extension.config.local.json
-web.config.local.json
+config/*.local.json
 wrangler.web.toml
 test-results/
 playwright-report/
