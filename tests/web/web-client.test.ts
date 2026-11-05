@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { FakeDiscord } from '../helpers/fake-discord.ts';
 import { TEST_ENV, WEB_ORIGIN, setup } from '../helpers/api.ts';
 import { referenceTotp, stepAt } from '../helpers/totp-reference.ts';
-import { WebError, WebSession, finishLogin, startLogin, type WebConfig } from '../../src/web/page/web-client.ts';
+import { SESSION_KEY, WebError, WebSession, finishLogin, startLogin, type WebConfig } from '../../src/web/page/web-client.ts';
 
 const T0 = 1_800_000_000_000;
 mock.timers.enable({ apis: ['Date'], now: T0 });
@@ -67,12 +67,11 @@ async function member(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'm
   return { userId, secret };
 }
 
-async function loggedIn(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member', calls: string[] = []) {
+async function loggedIn(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member', calls: string[] = [], storage = new MemoryStorage()) {
   const m = await member(t, role);
-  const storage = new MemoryStorage();
   const href = await discordRedirect(storage, m.userId);
   const { challengeToken } = await finishLogin(href, CONFIG, storage, apiFetch(t, calls));
-  return WebSession.verifyTotp(CONFIG, apiFetch(t, calls), challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
+  return WebSession.verifyTotp(CONFIG, apiFetch(t, calls), storage, challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
 }
 
 async function rejects(p: Promise<unknown>, code: string) {
@@ -87,7 +86,7 @@ test('W-06 Web ページのログイン：state と PKCE を確かめ、TOTP の
   assert.equal(((await session.get('/v1/members')).members as unknown[]).length, 1);
 });
 
-test('W-06 state と検証値は sessionStorage に1回だけ置き、戻ったら消す。トークンは置かない', async () => {
+test('W-06 state と検証値は sessionStorage に1回だけ置き、戻ったら消す', async () => {
   const t = setup();
   const m = await member(t);
   const storage = new MemoryStorage();
@@ -97,8 +96,8 @@ test('W-06 state と検証値は sessionStorage に1回だけ置き、戻った�
   assert.equal(storage.values.size, 0);
   // 同じ戻り先をもう一度使っても、通らない
   await rejects(finishLogin(href, CONFIG, storage, apiFetch(t)), 'NO_PENDING');
-  await WebSession.verifyTotp(CONFIG, apiFetch(t), challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
-  assert.equal(storage.values.size, 0);
+  await WebSession.verifyTotp(CONFIG, apiFetch(t), storage, challengeToken, referenceTotp(m.secret, stepAt(Date.now())));
+  assert.deepEqual([...storage.values.keys()], [SESSION_KEY], 'TOTP の後は、セッションの1件だけ');
 });
 
 test('W-06 state が違う戻り先は、API に送らずに断る（A-01）', async () => {
@@ -125,7 +124,8 @@ test('TOTP のコードが違えば BAD_CODE', async () => {
   const m = await member(t);
   const storage = new MemoryStorage();
   const { challengeToken } = await finishLogin(await discordRedirect(storage, m.userId), CONFIG, storage, apiFetch(t));
-  await rejects(WebSession.verifyTotp(CONFIG, apiFetch(t), challengeToken, '000000'), 'BAD_CODE');
+  await rejects(WebSession.verifyTotp(CONFIG, apiFetch(t), storage, challengeToken, '000000'), 'BAD_CODE');
+  assert.equal(storage.values.size, 0);
 });
 
 test('アクセストークンの期限が切れたら、メモリのリフレッシュトークンで1回だけ更新して読み直す', async () => {
@@ -152,4 +152,97 @@ test('Web ページから呼べるのは、決めた GET の入口だけ', async
   const session = await loggedIn(t);
   await rejects(session.get('/v1/items?after=0'), 'NOT_ALLOWED');
   await rejects(session.get('https://evil.example.com/v1/me'), 'NOT_ALLOWED');
+});
+
+// 再読み込みで戻る（2026-11-05 追記）。リフレッシュトークンと自分の ID・役割を sessionStorage に置き、開き直したら更新して使う
+function stored(storage: MemoryStorage): Record<string, unknown> {
+  return JSON.parse(storage.values.get(SESSION_KEY)!) as Record<string, unknown>;
+}
+
+test('W-08 sessionStorage に置くのは、リフレッシュトークンと、画面に出す自分の ID と役割だけ。アクセストークンは置かない', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const session = await loggedIn(t, 'member', [], storage);
+  assert.deepEqual(Object.keys(stored(storage)), ['refresh', 'member']);
+  assert.equal(typeof stored(storage).refresh, 'string');
+  assert.deepEqual(stored(storage).member, session.member);
+});
+
+test('W-08 再読み込みしたら、置いたリフレッシュトークンで同じセッションに戻る。セッションは増えない', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const first = await loggedIn(t, 'admin', [], storage);
+  const count = ((await first.get('/v1/me/sessions')).sessions as unknown[]).length;
+  const before = stored(storage).refresh;
+  const calls: string[] = [];
+  const again = await WebSession.resume(CONFIG, apiFetch(t, calls), storage);
+  assert.ok(again);
+  assert.deepEqual(calls, ['POST /v1/auth/refresh']);
+  assert.notEqual(stored(storage).refresh, before, '使ったリフレッシュトークンは、新しいものに置き換える');
+  assert.deepEqual(again.member, first.member);
+  const sessions = (await again.get('/v1/me/sessions')).sessions as { current: boolean }[];
+  assert.equal(sessions.length, count, '再読み込みで、新しいセッションを作らない');
+  assert.equal(sessions.filter((x) => x.current).length, 1);
+  // ログインから5分の間なら、管理者は監査ログも見られる（TOTP を確かめた時刻はセッションに残る）
+  assert.ok(Array.isArray((await again.get('/v1/audit-logs')).logs));
+});
+
+test('W-08 何も置いていない、または中身が壊れていれば、API を呼ばずにログインの画面へ。壊れた値は消す', async () => {
+  const t = setup();
+  const calls: string[] = [];
+  const storage = new MemoryStorage();
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t, calls), storage), null);
+  storage.setItem(SESSION_KEY, '{"refresh":1}');
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t, calls), storage), null);
+  storage.setItem(SESSION_KEY, '{"refresh":"r"}');
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t, calls), storage), null);
+  storage.setItem(SESSION_KEY, 'x');
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t, calls), storage), null);
+  assert.deepEqual(calls, []);
+  assert.equal(storage.values.size, 0);
+});
+
+test('W-08 期限（7日）が切れた、または無効にされたセッションでは戻らず、置いた値を消す', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  await loggedIn(t, 'member', [], storage);
+  mock.timers.setTime(T0 + 8 * 24 * 60 * 60 * 1000);
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t), storage), null);
+  assert.equal(storage.values.size, 0);
+
+  mock.timers.setTime(T0);
+  const storage2 = new MemoryStorage();
+  await loggedIn(t, 'member', [], storage2);
+  await t.db.prepare('UPDATE sessions SET revoked_at = ?').bind(Date.now()).run();
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t), storage2), null);
+  assert.equal(storage2.values.size, 0);
+});
+
+test('W-08 ページを開いたまま更新したら、置いた値も新しいリフレッシュトークンにする。その後の再読み込みでも戻れる', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const session = await loggedIn(t, 'member', [], storage);
+  const before = stored(storage).refresh;
+  mock.timers.setTime(T0 + 16 * 60 * 1000);
+  await session.get('/v1/me/sessions');
+  assert.notEqual(stored(storage).refresh, before);
+  assert.ok(await WebSession.resume(CONFIG, apiFetch(t), storage));
+});
+
+test('W-08 更新に失敗したら、置いた値を消す', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const session = await loggedIn(t, 'member', [], storage);
+  await t.db.prepare('UPDATE sessions SET revoked_at = ?').bind(Date.now()).run();
+  await rejects(session.get('/v1/me/sessions'), 'EXPIRED');
+  assert.equal(storage.values.size, 0);
+});
+
+test('W-08 「このタブのログインを消す」で、置いた値を消す。その後の再読み込みではログインの画面になる', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const session = await loggedIn(t, 'member', [], storage);
+  session.forget();
+  assert.equal(storage.values.size, 0);
+  assert.equal(await WebSession.resume(CONFIG, apiFetch(t), storage), null);
 });
