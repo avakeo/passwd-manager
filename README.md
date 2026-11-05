@@ -124,9 +124,9 @@ npm run test:browser   # 本物の Chrome で自動入力を確かめる（npm r
 
 テスト名には、仕様書のテスト ID を入れている。
 
-**結果（2026-11-03、fix/review-3-5-4-web）：`npm test` 649件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功。**
+**結果（2026-11-05、feat/web-session-storage）：`npm test` 658件すべて成功。`npm run typecheck` 成功。`npm run test:browser` 10件すべて成功（2026-11-03 の結果。今回は拡張機能を変えていない）。**
 
-仕様書のテスト ID は113個ある。自動テストがないのは次の2つだけ。
+仕様書のテスト ID は114個ある（2026-11-05 に W-08 を足した）。自動テストがないのは次の2つだけ。
 
 | ID | 扱い |
 |---|---|
