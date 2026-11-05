@@ -60,3 +60,9 @@ test('E-16 storage.session は既定の設定（信頼されたページだけ�
   assert.ok(files.some((f) => f.endsWith('background/background.ts')));
   for (const f of files) assert.ok(!/setAccessLevel/.test(readFileSync(new URL(f, root), 'utf8')), f);
 });
+
+test('設定の置き場所：例の設定は config/extension.example.json にあり、ビルドが読む項目がそろっている。手元の config/extension.local.json は Git の管理外', () => {
+  const example = JSON.parse(readFileSync(new URL('../../config/extension.example.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(example).sort(), Object.keys(CONFIG).sort());
+  assert.match(readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8'), /^config\/\*\.local\.json$/m);
+});

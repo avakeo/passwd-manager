@@ -34,7 +34,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
     });
     writeFileSync(out, privateKey);
     process.stdout.write(`秘密鍵を書いた（画面には出さない）：${out}\n`);
-    process.stdout.write(`manifestKey（extension.config.local.json に書く）：${Buffer.from(publicKey).toString('base64')}\n`);
+    process.stdout.write(`manifestKey（config/extension.local.json に書く）：${Buffer.from(publicKey).toString('base64')}\n`);
     process.stdout.write(`拡張機能 ID：${extensionIdFromPublicKey(publicKey)}\n`);
   }
 }
