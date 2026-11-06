@@ -195,8 +195,30 @@ function rememberSection(remembered: boolean): HTMLElement {
   return section(
     'この端末を覚える',
     'remember',
-    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（5分以内）に決めてください。', className: 'muted' }),
+    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（15分以内）に決めてください。', className: 'muted' }),
     form,
+    out,
+  );
+}
+
+// 入力できるページを開いたときの通知（2026-11-06 追記、E-23）。最初はオン
+async function notifySection(): Promise<HTMLElement> {
+  const out = result();
+  const toggle = el('input', { type: 'checkbox', className: 'switch' });
+  toggle.checked = (await send({ type: 'getNotify' })).notify === true;
+  toggle.addEventListener('change', async () => {
+    const r = await send({ type: 'setNotify', enabled: toggle.checked });
+    if (!r.ok) toggle.checked = !toggle.checked;
+    show(out, r, r.notify ? 'オンにしました。' : 'オフにしました。アイコンの件数は出ます。');
+  });
+  return section(
+    '入力できるページの通知',
+    'notify',
+    el('label', { className: 'toggle' }, toggle, el('span', { text: '入力できるアイテムがあるページを開いたら知らせる' })),
+    el('p', {
+      text: '同じサイトにはロックするまで1回だけ、件数だけを知らせます。アイテムの名前やユーザー名は通知に書きません。',
+      className: 'muted',
+    }),
     out,
   );
 }
@@ -275,7 +297,7 @@ async function render(notice?: string): Promise<void> {
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
   if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
-  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の5分以内に決めるため）。覚えた後は設定の中に置く
+  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の15分以内に決めるため）。覚えた後は設定の中に置く
   if (s.deviceRemembered === false) root.append(rememberSection(false));
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く
@@ -301,6 +323,7 @@ async function render(notice?: string): Promise<void> {
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
   if (s.deviceRemembered === true) settings.append(rememberSection(true));
   if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
+  if (s.vault === 'ready') settings.append(await notifySection());
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   if (s.vault === 'ready') settings.append(syncResetSection(() => void render()));
   if (s.vault === 'ready') settings.append(await deviceTrustSection());

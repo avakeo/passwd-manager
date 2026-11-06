@@ -12,12 +12,29 @@ test('E-16 manifest：権限は決めたものと API の接続先だけ。全�
   const m = buildManifest(template, CONFIG) as Record<string, unknown>;
   assert.equal(m.manifest_version, 3);
   // フェーズ3：今のタブへの一時権限、注入、オフスクリーンドキュメント、クリップボードの書き込みと読み直し（2026-10-27 決定、判断待ち2）
-  assert.deepEqual(m.permissions, ['storage', 'identity', 'activeTab', 'scripting', 'offscreen', 'clipboardWrite', 'clipboardRead']);
+  // tabs：アイコンの件数のために、タブの URL を読む（2026-11-06 追記、E-22）。注入は今まで通り activeTab の一時権限だけ
+  // notifications：入力できるページを開いたときの通知（2026-11-06 追記、E-23）
+  assert.deepEqual(m.permissions, ['storage', 'identity', 'activeTab', 'scripting', 'offscreen', 'clipboardWrite', 'clipboardRead', 'tabs', 'notifications']);
   assert.deepEqual(m.host_permissions, ['https://pw-api.example.com/*']);
   for (const k of ['content_scripts', 'externally_connectable', 'web_accessible_resources', 'optional_permissions', 'optional_host_permissions']) assert.equal(k in m, false, k);
   assert.equal(m.key, CONFIG.manifestKey);
   assert.deepEqual(m.background, { service_worker: 'extension/background/service-worker.js', type: 'module' });
   assert.match(String((m.content_security_policy as Record<string, string>).extension_pages), /^script-src 'self'; object-src 'none'/);
+});
+
+test('E-21 manifest：Alt+L（Mac は Option+L）でポップアップを開く。ショートカットはポップアップを開くだけで、入力はポップアップの操作から', () => {
+  const m = buildManifest(template, CONFIG) as Record<string, unknown>;
+  assert.deepEqual(m.commands, { _execute_action: { suggested_key: { default: 'Alt+L', mac: 'Alt+L' } } });
+});
+
+test('アイコン：manifest の icons とツールバーのアイコンに 16・32・48・128px を指定し、ビルドに PNG が入る（2026-11-06 追記）', async () => {
+  const m = buildManifest(template, CONFIG) as Record<string, Record<string, unknown>>;
+  const icons = { '16': 'extension/icons/icon-16.png', '32': 'extension/icons/icon-32.png', '48': 'extension/icons/icon-48.png', '128': 'extension/icons/icon-128.png' };
+  assert.deepEqual(m.icons, icons);
+  assert.deepEqual(m.action!.default_icon, icons);
+  const out = new URL('../../dist/test-extension-icons/', import.meta.url);
+  await buildExtension({ outDir: out, config: CONFIG });
+  for (const f of Object.values(icons)) assert.deepEqual([...readFileSync(new URL(f, out)).subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47], f);
 });
 
 test('manifest：API の接続先は https のオリジンだけ。パス付き・http・ワイルドカードは断る', () => {

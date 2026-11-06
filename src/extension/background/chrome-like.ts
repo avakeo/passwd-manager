@@ -17,7 +17,12 @@ export type InjectionResult<R> = { frameId: number; documentId: string; result?:
 export interface ChromeLike {
   runtime: { id: string; getURL(path: string): string; sendMessage(message: unknown): Promise<unknown> };
   // 今のタブの URL は、ポップアップの操作で得た一時権限（activeTab）で読む
-  tabs: { get(tabId: number): Promise<{ id?: number; url?: string }> };
+  // 全タブの URL は、アイコンの件数のために tabs の権限で読む（E-22）
+  tabs: { get(tabId: number): Promise<{ id?: number; url?: string; active?: boolean }>; query(queryInfo: Record<string, never>): Promise<{ id?: number; url?: string }[]> };
+  action: { setBadgeText(details: { tabId: number; text: string }): Promise<void> };
+  // 入力できるページを開いたときの通知と、そこに書くショートカット（E-23）
+  notifications: { create(id: string, options: { type: 'basic'; iconUrl: string; title: string; message: string }): Promise<string> };
+  commands: { getAll(): Promise<{ name?: string; shortcut?: string }[]> };
   scripting: {
     executeScript<A extends unknown[], R>(injection: { target: InjectionTarget; func: (...args: A) => R; args?: A }): Promise<InjectionResult<Awaited<R>>[]>;
   };

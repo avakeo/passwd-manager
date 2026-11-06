@@ -45,10 +45,17 @@ function resume(t: ReturnType<typeof setup>, deviceToken: string, pinProof: stri
   return t.request('POST', '/v1/auth/resume', undefined, { device_token: deviceToken, pin_proof: pinProof });
 }
 
-test('A-16 端末を覚えられるのは、直近5分以内に TOTP を確かめたセッションだけ。トークンは D1 にハッシュだけ', async () => {
+test('A-16 端末を覚えられるのは、直近15分以内に TOTP を確かめたセッションだけ（2026-11-06 に5分から延ばした）。トークンは D1 にハッシュだけ', async () => {
   const t = setup();
-  const old = await t.addMember('active', { totpVerifiedAt: Date.now() - 6 * 60 * 1000 });
+  const old = await t.addMember('active', { totpVerifiedAt: Date.now() - 16 * 60 * 1000 });
   assert.equal((await t.request('POST', '/v1/me/devices', old.token, { pin_proof: await proof('2580') })).status, 403);
+  const recent = await t.addMember('active', { totpVerifiedAt: Date.now() - 14 * 60 * 1000 });
+  assert.equal((await t.request('POST', '/v1/me/devices', recent.token, { pin_proof: await proof('2580') })).status, 201, '14分前なら覚えられる');
+  // 管理操作などの再確認は5分のまま
+  const admin = await t.addMember('active', { role: 'admin', totpVerifiedAt: Date.now() - 14 * 60 * 1000 });
+  assert.equal((await t.request('GET', '/v1/audit-logs', admin.token)).status, 403);
+  const freshAdmin = await t.addMember('active', { role: 'admin', totpVerifiedAt: Date.now() - 4 * 60 * 1000 });
+  assert.equal((await t.request('GET', '/v1/audit-logs', freshAdmin.token)).status, 200);
   const { m, deviceToken, body } = await remembered(t);
   assert.match(deviceToken, /^[A-Za-z0-9_-]{43}$/);
   const session = t.db.db.prepare('SELECT refresh_expires_at FROM sessions WHERE id = ?').get(m.sessionId)!;

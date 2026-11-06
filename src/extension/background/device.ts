@@ -39,7 +39,7 @@ export function createDevice(ctx: Context) {
   }
 
   const handlers = {
-    // TOTP を確かめてから5分を過ぎていたら、サーバーが 403 を返す。認証アプリのコードで再確認してからやり直す
+    // TOTP を確かめてから15分を過ぎていたら、サーバーが 403 を返す。認証アプリのコードで再確認してからやり直す
     async rememberDevice(m) {
       const s = await readySession();
       const body = expect(await api.call('POST', '/v1/me/devices', { pin_proof: await proof(s.memberId, String(m.pin)) }), 201, { 403: 'STEP_UP_REQUIRED' });

@@ -51,6 +51,9 @@ export const MESSAGE_SCHEMAS = {
   setupQuickUnlock: [{ passcode: PASSCODE }],
   // ロック解除を保つ（2026-10-29 追記）
   setKeepUnlocked: [{ enabled: { kind: 'boolean' } }],
+  // 入力できるページを開いたときの通知（2026-11-06 追記、E-23）
+  getNotify: [{}],
+  setNotify: [{ enabled: { kind: 'boolean' } }],
   // 承認の照合、承認、削除、監査ログ（フェーズ4a）。照合は、画面に出した値をそのまま送り返してもらう
   adminSigner: [{}],
   confirmAdminSigner: [{ keyId: KEY_ID, fingerprint: FINGERPRINT, vaultKeyVersion: REVISION }],

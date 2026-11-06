@@ -60,13 +60,20 @@ declare module 'node:sqlite' {
 
 declare module 'node:fs' {
   export function readFileSync(path: string | URL, encoding: 'utf8'): string;
-  export function writeFileSync(path: string | URL, data: string): void;
+  export function readFileSync(path: string | URL): Uint8Array;
+  export function writeFileSync(path: string | URL, data: string | Uint8Array): void;
   export function existsSync(path: string | URL): boolean;
   export function mkdirSync(path: string | URL, options?: { recursive?: boolean }): void;
   export function readdirSync(path: string | URL, options?: { recursive: true }): string[];
   export function copyFileSync(src: string | URL, dest: string | URL): void;
   export function rmSync(path: string | URL, options?: { recursive?: boolean; force?: boolean }): void;
   export function mkdtempSync(prefix: string): string;
+}
+
+// 拡張機能のアイコンの PNG を作る（scripts/make-icons.ts）
+declare module 'node:zlib' {
+  export function crc32(data: Uint8Array): number;
+  export function deflateSync(data: Uint8Array, options?: { level?: number }): Uint8Array;
 }
 
 // ブラウザのテスト（tests/browser）で、使い捨てのプロファイルの置き場所を作る
