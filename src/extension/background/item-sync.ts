@@ -370,5 +370,15 @@ export function createItemSync(ctx: Context, openVault: () => Promise<VaultState
     },
   } satisfies Record<string, Handler>;
 
-  return { handlers, readItem, sync };
+  // アイコンの件数のために、ロック解除していれば一覧を読み込む（E-22）。ロック中やログインしていなければ何もしない
+  async function loadIndex(): Promise<void> {
+    if (state.unlockedBy === null) return;
+    try {
+      await loadCache(await vaultMember());
+    } catch {
+      // ロックされた、ログインしていない：件数を出さないだけ
+    }
+  }
+
+  return { handlers, loadIndex, readItem, sync };
 }

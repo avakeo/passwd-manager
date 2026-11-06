@@ -5,7 +5,9 @@
   "version": "0.1.0",
   "minimum_chrome_version": "120",
   "background": { "service_worker": "extension/background/service-worker.js", "type": "module" },
-  "action": { "default_popup": "extension/popup/popup.html", "default_title": "teampw" },
-  "permissions": ["storage", "identity", "activeTab", "scripting", "offscreen", "clipboardWrite", "clipboardRead"],
+  "icons": { "16": "extension/icons/icon-16.png", "32": "extension/icons/icon-32.png", "48": "extension/icons/icon-48.png", "128": "extension/icons/icon-128.png" },
+  "action": { "default_popup": "extension/popup/popup.html", "default_title": "teampw", "default_icon": { "16": "extension/icons/icon-16.png", "32": "extension/icons/icon-32.png", "48": "extension/icons/icon-48.png", "128": "extension/icons/icon-128.png" } },
+  "permissions": ["storage", "identity", "activeTab", "scripting", "offscreen", "clipboardWrite", "clipboardRead", "tabs", "notifications"],
+  "commands": { "_execute_action": { "suggested_key": { "default": "Alt+L", "mac": "Alt+L" } } },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" }
 }

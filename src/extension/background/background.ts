@@ -9,6 +9,8 @@
 //   - クイックロック解除（2b）：Vault 鍵だけを、パスコード由来の鍵で包んで storage.session に置く。戻った状態は秘密鍵を持たない（passcode.ts）
 //   - この端末を覚える（2026-10-29）：ブラウザを閉じた後も、4桁のパスコードで同じセッションに戻る。間違いはサーバーが数える（device.ts）
 //   - ロック解除を保つ（2026-10-29）：利用者が選んだときだけ、Vault 鍵を storage.session に置き、止まった後も入力なしで戻る（session-unlock.ts）
+//   - アイコンの件数（2026-11-06）：今のタブで入力できるログインアイテムの数を出す。メッセージの処理の後と、タブの変化で数え直す（badge.ts）
+//     タブの変化のときは、同じオリジンへロックまで1回だけ、件数だけの通知も出す（設定でオフにできる）
 // このファイルは、メッセージの入口と、種類ごとの処理の表をまとめる。処理の中身は account.ts、vault.ts、passcode.ts、item-sync.ts にある
 
 import type { MessageSender } from './chrome-like.ts';
@@ -22,6 +24,7 @@ import { createDevice } from './device.ts';
 import { createAdmin } from './admin.ts';
 import { createVault } from './vault.ts';
 import { createAutofill } from './autofill.ts';
+import { createBadge } from './badge.ts';
 import { Fail, LAST_ACTIVITY_KEY, createContext, type BackgroundDeps, type Handler, type Reply } from './context.ts';
 import { CryptoError } from '../../crypto/errors.ts';
 
@@ -31,6 +34,8 @@ export type { BackgroundDeps, VaultState } from './context.ts';
 export type Background = {
   handleMessage(message: unknown, sender: MessageSender): Promise<Reply>;
   onStartup(): Promise<void>;
+  // タブを開いた・移った・切り替えたとき（service-worker.ts が chrome.tabs のイベントから呼ぶ）
+  onTabChanged(tabId: number): Promise<void>;
   // テスト用：メモリに鍵が残っているか（メッセージからは呼べない。中身は返さない）
   memoryState(): { unlocked: boolean; vaultKey: boolean };
 };
@@ -48,6 +53,7 @@ export function createBackground(deps: BackgroundDeps): Background {
   const account = createAccount(ctx, passcode, session, device); // 状態、ログイン、TOTP、ロック、セッション
   const autofill = createAutofill(ctx, items.readItem);
   const admin = createAdmin(ctx, vault.openVault, items.sync, session.afterPasswordUnlock); // 承認の照合、承認、削除（フェーズ4a） // 自動入力とコピー（フェーズ3）
+  const badge = createBadge(ctx); // アイコンの件数
 
   const handlers: Record<Message['type'], Handler> = {
     ...account.handlers,
@@ -58,6 +64,7 @@ export function createBackground(deps: BackgroundDeps): Background {
     ...items.handlers,
     ...autofill.handlers,
     ...admin.handlers,
+    ...badge.handlers,
   };
 
   return {
@@ -67,6 +74,18 @@ export function createBackground(deps: BackgroundDeps): Background {
 
     async onStartup() {
       await checkIdle();
+    },
+
+    async onTabChanged(tabId) {
+      try {
+        // メッセージと同じく、放置の確認の後に、ロック解除を保つ設定なら戻る。操作の時刻は新しくしない
+        await checkIdle();
+        await session.resume();
+        await items.loadIndex();
+        await badge.refreshTab(tabId);
+      } catch {
+        // 件数を出せないだけ
+      }
     },
 
     async handleMessage(raw, sender) {
@@ -84,6 +103,9 @@ export function createBackground(deps: BackgroundDeps): Background {
         if (e instanceof Fail || e instanceof ApiError) return { ok: false, error: e.code };
         if (e instanceof CryptoError) return { ok: false, error: 'CRYPTO' };
         return { ok: false, error: 'INTERNAL' };
+      } finally {
+        // ロック・ロック解除・アイテムの変更を、開いているタブの件数に映す。失敗しても返事は変えない
+        await items.loadIndex().then(badge.refreshAll).catch(() => undefined);
       }
     },
   };

@@ -40,7 +40,7 @@ export async function buildExtension(opts: { outDir: URL; config: ExtensionConfi
     stdio: 'inherit',
   });
   const srcExt = new URL('src/extension/', ROOT);
-  for (const f of readdirSync(srcExt, { recursive: true }).map((p) => p.replace(/\\/g, '/')).filter((p) => /\.(html|css)$/.test(p))) {
+  for (const f of readdirSync(srcExt, { recursive: true }).map((p) => p.replace(/\\/g, '/')).filter((p) => /\.(html|css|png)$/.test(p))) {
     const dest = new URL(`extension/${f}`, opts.outDir);
     mkdirSync(new URL('./', dest), { recursive: true });
     copyFileSync(new URL(f, srcExt), dest);

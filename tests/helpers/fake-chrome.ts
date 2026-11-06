@@ -5,6 +5,8 @@
 //   tabs・scripting：タブの URL と、トップフレームの文書 ID だけを持つ。注入は呼ばれた引数を記録し、関数は本物を動かさない
 //     （確認のスクリプトはタブのオリジンを、入力のスクリプトは入れた欄の数を返したことにする）
 //   offscreen・runtime.sendMessage：オフスクリーンドキュメントへのコピーの依頼を記録する
+//   action：タブごとのアイコンの件数（バッジの文字）を記録する（E-22）
+//   notifications・commands：出した通知を記録する。ポップアップを開くショートカットは shortcut（E-23）
 
 import type { ChromeLike, InjectionResult, InjectionTarget, StorageArea } from '../../src/extension/background/chrome-like.ts';
 import assert from 'node:assert/strict';
@@ -44,7 +46,7 @@ export class FakeStorageArea implements StorageArea {
   }
 }
 
-export type FakeTab = { url: string; documentId: string; frames?: number[] };
+export type FakeTab = { url: string; documentId: string; frames?: number[]; active?: boolean };
 export type Injection = { target: InjectionTarget; func: string; args: unknown[] };
 
 export class FakeChrome implements ChromeLike {
@@ -78,7 +80,28 @@ export class FakeChrome implements ChromeLike {
     get: async (tabId: number) => {
       const tab = this.openTabs.get(tabId);
       if (!tab) throw new Error(`No tab with id: ${tabId}.`);
-      return { id: tabId, url: tab.url };
+      return { id: tabId, url: tab.url, active: tab.active ?? true };
+    },
+    query: async (_query: Record<string, never>) => [...this.openTabs.entries()].map(([id, tab]) => ({ id, url: tab.url })),
+  };
+  // タブ ID ごとのバッジの文字。閉じたタブに書くと、本物と同じく投げる
+  readonly badges = new Map<number, string>();
+  readonly shownNotifications: { id: string; options: { type: string; iconUrl: string; title: string; message: string } }[] = [];
+  shortcut = 'Alt+L';
+  readonly commands = {
+    getAll: async () => [{ name: '_execute_action', shortcut: this.shortcut }],
+  };
+  readonly notifications = {
+    create: async (id: string, options: { type: string; iconUrl: string; title: string; message: string }) => {
+      assert.equal(options.iconUrl, this.runtime.getURL('extension/icons/icon-128.png'));
+      this.shownNotifications.push({ id, options: structuredClone(options) });
+      return id;
+    },
+  };
+  readonly action = {
+    setBadgeText: async (details: { tabId: number; text: string }) => {
+      if (!this.openTabs.has(details.tabId)) throw new Error(`No tab with id: ${details.tabId}.`);
+      this.badges.set(details.tabId, details.text);
     },
   };
   readonly scripting = {

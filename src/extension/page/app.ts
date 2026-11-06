@@ -201,6 +201,28 @@ function rememberSection(remembered: boolean): HTMLElement {
   );
 }
 
+// 入力できるページを開いたときの通知（2026-11-06 追記、E-23）。最初はオン
+async function notifySection(): Promise<HTMLElement> {
+  const out = result();
+  const toggle = el('input', { type: 'checkbox', className: 'switch' });
+  toggle.checked = (await send({ type: 'getNotify' })).notify === true;
+  toggle.addEventListener('change', async () => {
+    const r = await send({ type: 'setNotify', enabled: toggle.checked });
+    if (!r.ok) toggle.checked = !toggle.checked;
+    show(out, r, r.notify ? 'オンにしました。' : 'オフにしました。アイコンの件数は出ます。');
+  });
+  return section(
+    '入力できるページの通知',
+    'notify',
+    el('label', { className: 'toggle' }, toggle, el('span', { text: '入力できるアイテムがあるページを開いたら知らせる' })),
+    el('p', {
+      text: '同じサイトにはロックするまで1回だけ、件数だけを知らせます。アイテムの名前やユーザー名は通知に書きません。',
+      className: 'muted',
+    }),
+    out,
+  );
+}
+
 // ロック解除を保つ（2026-10-29 追記）。オンにするのはマスターパスワードで解除した状態からだけ
 function keepUnlockedSection(on: boolean, canEnable: boolean): HTMLElement {
   const out = result();
@@ -301,6 +323,7 @@ async function render(notice?: string): Promise<void> {
   const settings = el('details', { className: 'settings' }, el('summary', { text: '設定とセキュリティ（パスコード、TOTP、セッション、鍵）' }));
   if (s.deviceRemembered === true) settings.append(rememberSection(true));
   if (s.vault === 'ready') settings.append(keepUnlockedSection(s.keepUnlocked === true, s.unlockedBy === 'password'));
+  if (s.vault === 'ready') settings.append(await notifySection());
   if (s.vault === 'ready' && s.unlockedBy === 'password') settings.append(passcodeSection(() => void render()));
   if (s.vault === 'ready') settings.append(syncResetSection(() => void render()));
   if (s.vault === 'ready') settings.append(await deviceTrustSection());

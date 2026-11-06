@@ -15,6 +15,8 @@ export const IDLE_LOCK_MS = 45 * 60 * 1000; // 2026-10-29 に15分から延ば�
 export const LAST_ACTIVITY_KEY = 'teampw/v1/last-activity';
 // ロックで消す、ロック解除のための保存（2b のクイックロック解除が使う）
 export const UNLOCK_KEY_PREFIX = 'teampw/v1/unlock|';
+// 通知したオリジン（storage.session）。ロックで消し、解除し直したらまた通知する（E-23、badge.ts）
+export const NOTIFIED_KEY = 'teampw/v1/notified';
 
 export const QUICK_UNLOCK_MAX_FAILURES = 5;
 
@@ -130,7 +132,7 @@ export function createContext(deps: BackgroundDeps): Context {
     state.index.clear();
     state.cacheLoadedFor = null;
     const all = await chrome.storage.session.get(null);
-    const keys = Object.keys(all).filter((k) => k.startsWith(UNLOCK_KEY_PREFIX));
+    const keys = Object.keys(all).filter((k) => k.startsWith(UNLOCK_KEY_PREFIX) || k === NOTIFIED_KEY);
     if (keys.length > 0) await chrome.storage.session.remove(keys);
   }
 
