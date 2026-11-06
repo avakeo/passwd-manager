@@ -101,11 +101,11 @@ export function authorize(p: Principal, method: string, path: string): void {
 // 自分の別のセッションの無効化も、この判定を通す（A-15）。
 export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 
-export function hasRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): boolean {
+export function hasRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number, windowMs = STEP_UP_WINDOW_MS): boolean {
   const at = p.totpVerifiedAt;
-  return at !== null && at <= nowMs && nowMs - at <= STEP_UP_WINDOW_MS;
+  return at !== null && at <= nowMs && nowMs - at <= windowMs;
 }
 
-export function requireRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number): void {
-  if (!hasRecentTotp(p, nowMs)) throw new HttpProblem(403);
+export function requireRecentTotp(p: { totpVerifiedAt: number | null }, nowMs: number, windowMs = STEP_UP_WINDOW_MS): void {
+  if (!hasRecentTotp(p, nowMs, windowMs)) throw new HttpProblem(403);
 }

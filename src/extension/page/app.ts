@@ -195,7 +195,7 @@ function rememberSection(remembered: boolean): HTMLElement {
   return section(
     'この端末を覚える',
     'remember',
-    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（5分以内）に決めてください。', className: 'muted' }),
+    el('p', { text: 'ブラウザを開き直したときに、Discord と認証アプリの代わりに4桁のパスコードで戻れます（ログインから7日まで）。3回間違えると忘れます。ログインの直後（15分以内）に決めてください。', className: 'muted' }),
     form,
     out,
   );
@@ -275,7 +275,7 @@ async function render(notice?: string): Promise<void> {
   if (s.hasKey === false) root.append(keySection(false));
   if (s.vault === 'needs-init') root.append(initSection());
   if (s.locked) root.append(section('ロック解除', 'unlock', unlockForms(s.quickUnlockAvailable === true, render)));
-  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の5分以内に決めるため）。覚えた後は設定の中に置く
+  // まだ覚えていない端末では、一覧の上に出す（ログインの直後の15分以内に決めるため）。覚えた後は設定の中に置く
   if (s.deviceRemembered === false) root.append(rememberSection(false));
   if (s.vault === 'ready') {
     // アイテム（2b）。開いた1件の中身は、この画面のメモリにだけ置く

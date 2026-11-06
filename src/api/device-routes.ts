@@ -1,5 +1,5 @@
 // この端末を覚える（2026-10-29 追記。仕様書「この端末を覚える」、A-16〜A-19）。
-//   POST /v1/me/devices：直近5分以内に TOTP を確かめたセッションで、端末のトークンを作る（パスコードの値を受け取る）
+//   POST /v1/me/devices：直近15分以内に TOTP を確かめたセッションで、端末のトークンを作る（パスコードの値を受け取る）
 //   POST /v1/auth/resume（公開）：端末のトークンとパスコードの値で、同じセッションの新しいトークンを返す
 // パスコードは4桁しかないので、間違いの回数をここで数える。確かめる前に回数を1つ増やし（同時に送られても3回まで）、
 // 3回間違えたら端末のトークンを無効にする。D1 には、トークンの SHA-256 と、パスコードの値をサーバーの鍵で HMAC にした値だけを置く
@@ -63,13 +63,17 @@ type DeviceRow = {
   discord_user_id: string;
 };
 
+// 覚えられるのは、TOTP を確かめてから15分まで（2026-11-06 に5分から延ばした。ログインの後に設定の画面まで進む時間が足りなかったため）。
+// 管理操作などの再確認（STEP_UP_WINDOW_MS）は5分のまま
+export const DEVICE_REMEMBER_WINDOW_MS = 15 * 60 * 1000;
+
 export function registerDeviceRoutes(app: Hono<Env>): void {
   app.post('/v1/me/devices', async (c) => {
     const p = c.get('principal');
     const body = await readJson(c.req.raw, ['pin_proof']);
     if (typeof body.pin_proof !== 'string' || !TOKEN_PATTERN.test(body.pin_proof)) throw new HttpProblem(400);
-    // 盗まれたアクセストークンだけでは覚えさせない。ログインの直後（TOTP を確かめてから5分以内）だけ（A-16）
-    requireRecentTotp(p, Date.now());
+    // 盗まれたアクセストークンだけでは覚えさせない。ログインの直後（TOTP を確かめてから15分以内）だけ（A-16）
+    requireRecentTotp(p, Date.now(), DEVICE_REMEMBER_WINDOW_MS);
     const db = c.env.DB;
     const session = await db.prepare('SELECT refresh_expires_at FROM sessions WHERE id = ?').bind(p.sessionId).first<{ refresh_expires_at: number | null }>();
     if (!session || session.refresh_expires_at === null) throw new HttpProblem(403);

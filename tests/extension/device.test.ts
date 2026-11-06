@@ -81,12 +81,19 @@ test('A-19 ログアウトすると、端末のトークンを消し、サーバ
   assert.equal(res.status, 403);
 });
 
-test('A-16 ログインから5分を過ぎたら、認証アプリのコードで再確認してからでないと覚えられない', async () => {
+test('A-16 ログインから15分を過ぎたら、認証アプリのコードで再確認してからでないと覚えられない（2026-11-06 に5分から延ばした）', async () => {
   const w = world(discord);
   await adminReady(w, discord);
-  mock.timers.setTime(T0 + 6 * 60 * 1000);
+  mock.timers.setTime(T0 + 16 * 60 * 1000);
   assert.deepEqual(await send(w, { type: 'rememberDevice', pin: PIN }), { ok: false, error: 'STEP_UP_REQUIRED' });
   assert.equal(deviceRecord(w), undefined);
+});
+
+test('A-16 ログインから10分なら、再確認なしで覚えられる（2026-11-06）', async () => {
+  const w = world(discord);
+  await adminReady(w, discord);
+  mock.timers.setTime(T0 + 10 * 60 * 1000);
+  assert.deepEqual(await send(w, { type: 'rememberDevice', pin: PIN }), { ok: true });
 });
 
 test('忘れる：手元の端末のトークンを消す。パスコードは4桁の数字だけ', async () => {
