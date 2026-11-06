@@ -47,6 +47,7 @@ const ERRORS: Record<string, string> = {
   CODE_REQUIRED: '今の認証アプリのコードか、回復コードを入れてください',
   RATE_LIMITED: '失敗が続いたので、しばらく待ってください',
   STEP_UP_REQUIRED: '先に認証アプリのコードで再確認してください',
+  NO_WEB_PAGE: 'Web ページの接続先が設定されていません',
   KEY_EXISTS: '鍵はもう作ってあります',
   CONFLICT: 'ほかの操作とぶつかりました。状態を読み直してください',
   NOT_ADMIN: '管理者だけができる操作です',

@@ -1,4 +1,5 @@
 // 状態の問い合わせ、ログイン（Discord と TOTP）、ログアウト、ロック、セッションの一覧と無効化（フェーズ1・2a）。
+// 拡張機能から Web ページを開く（2026-11-05 追記、W-09）。
 //   - トークンは chrome.storage.session（storage.ts）。応答には入れない
 //   - ロックとログアウトは、ログインの途中の一時トークンも消す（DeepSeek #5）
 
@@ -9,6 +10,7 @@ import { Fail, QUICK_UNLOCK_MAX_FAILURES, type Context, type Handler } from './c
 import type { createPasscode } from './passcode.ts';
 import type { createSessionUnlock } from './session-unlock.ts';
 import type { createDevice } from './device.ts';
+import { fromPopup } from './messages.ts';
 
 export function createAccount(
   ctx: Context,
@@ -171,6 +173,18 @@ export function createAccount(
       await readySession();
       expect(await api.call('DELETE', `/v1/me/sessions/${String(m.sessionId)}`), 204, { 403: 'STEP_UP_REQUIRED', 404: 'NOT_FOUND' });
       return { ok: true };
+    },
+
+    // 1分だけ使える使い捨てのコードを作り、設定の Web ページのオリジンの # の後ろに付けて返す（# の後ろはサーバーに送られない）。
+    // 開く先はサーバーの値を使わない。全画面ページからだけ受ける（ポップアップは開いた後すぐ閉じるため）
+    async openWebPage(_m, sender) {
+      if (fromPopup(chrome.runtime, sender)) throw new Fail('BAD_REQUEST');
+      if (deps.webOrigin === null) throw new Fail('NO_WEB_PAGE');
+      await readySession();
+      const body = expect(await api.call('POST', '/v1/me/web-handoff', {}), 201, { 404: 'NO_WEB_PAGE' });
+      const code = body.code;
+      if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(code)) throw new Fail('SERVER');
+      return { ok: true, url: `${deps.webOrigin}/#handoff=${code}` };
     },
   } satisfies Record<string, Handler>;
 

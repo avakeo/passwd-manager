@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { buildExtension, buildManifest } from '../../scripts/build-extension.ts';
 
-const CONFIG = { apiOrigin: 'https://pw-api.example.com', discordClientId: '100000000000000001', manifestKey: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtest' };
+const CONFIG = { apiOrigin: 'https://pw-api.example.com', webOrigin: 'https://pw.example.com', discordClientId: '100000000000000001', manifestKey: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtest' };
 const template = JSON.parse(readFileSync(new URL('../../src/extension/manifest.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 
 test('E-16 manifest：権限は決めたものと API の接続先だけ。全サイトへの権限、content_scripts・externally_connectable・web_accessible_resources を持たない', () => {
@@ -65,4 +65,18 @@ test('設定の置き場所：例の設定は config/extension.example.json に�
   const example = JSON.parse(readFileSync(new URL('../../config/extension.example.json', import.meta.url), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(Object.keys(example).sort(), Object.keys(CONFIG).sort());
   assert.match(readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8'), /^config\/\*\.local\.json$/m);
+});
+
+test('W-09 設定の webOrigin（Web ページを開く先）は https のオリジンだけ。書けば config.js に入り、書かなければ null', async () => {
+  for (const webOrigin of ['http://pw.example.com', 'https://pw.example.com/x', 'https://*.example.com', 'pw.example.com']) {
+    assert.throws(() => buildManifest(template, { ...CONFIG, webOrigin }), webOrigin);
+  }
+  const out = new URL('../../dist/test-extension-web/', import.meta.url);
+  await buildExtension({ outDir: out, config: CONFIG });
+  assert.match(readFileSync(new URL('extension/config.js', out), 'utf8'), /"webOrigin":"https:\/\/pw\.example\.com"/);
+  const { webOrigin: _omit, ...withoutWeb } = CONFIG;
+  await buildExtension({ outDir: out, config: withoutWeb });
+  assert.match(readFileSync(new URL('extension/config.js', out), 'utf8'), /"webOrigin":null/);
+  // manifest の権限は増やさない（タブを開くだけなので、Web ページのオリジンへの権限は要らない）
+  assert.deepEqual(buildManifest(template, CONFIG).host_permissions, ['https://pw-api.example.com/*']);
 });

@@ -4,6 +4,7 @@
 
 import { deviceResumeForm, loginTotpForm, unlockForms } from '../shared/forms.ts';
 import { el, errorText, onLocked, recoveryNotice, send } from '../shared/ui.ts';
+import { CONFIG } from '../config.ts';
 import { blankItem, editorSection, itemsSection, openItem, passcodeSection } from './items.ts';
 import { importSection } from './import.ts';
 import { auditSection, deviceTrustSection, generationInitSection, memberVerifySection, membersSection, rotationSection } from './members.ts';
@@ -316,7 +317,21 @@ async function render(notice?: string): Promise<void> {
     await send({ type: 'logout' });
     await render();
   });
-  header.append(el('div', { className: 'row' }, lock, logout));
+  const row = el('div', { className: 'row' });
+  // 拡張機能から Web ページを開く（2026-11-05 追記、W-09）。Discord と TOTP なしで、Web ページの読み取り専用のセッションになる
+  if (CONFIG.webOrigin !== null) {
+    const out = el('p', { className: 'error' });
+    const web = el('button', { text: 'Web ページを開く', className: 'secondary' });
+    web.addEventListener('click', async () => {
+      out.textContent = '';
+      const r = await send({ type: 'openWebPage' });
+      if (r.ok) window.open(String(r.url), '_blank', 'noopener');
+      else out.textContent = errorText(r.error);
+    });
+    row.append(web);
+    header.append(row, out);
+  } else header.append(row);
+  row.append(lock, logout);
   const target = location.hash.length > 1 ? document.getElementById(location.hash.slice(1)) : null;
   if (target && settings.contains(target)) settings.open = true;
   if (target) target.scrollIntoView();

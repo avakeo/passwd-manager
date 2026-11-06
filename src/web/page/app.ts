@@ -4,7 +4,7 @@
 // 再読み込みしたら、sessionStorage に置いたリフレッシュトークンで同じセッションに戻る（2026-11-05 追記、W-08）。タブを閉じれば消える。
 
 import { CONFIG } from '../config.ts';
-import { WebError, WebSession, finishLogin, startLogin } from './web-client.ts';
+import { WebError, WebSession, finishLogin, handoffCode, startLogin } from './web-client.ts';
 
 const root = document.getElementById('root')!;
 
@@ -23,6 +23,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props = {}, ..
 }
 
 const MESSAGES: Record<string, string> = {
+  HANDOFF: '拡張機能から開いたリンクが、使用済みか期限切れです。拡張機能の「Web ページを開く」からもう一度開いてください',
   NO_PENDING: 'ログインの途中の情報がありません。もう一度ログインしてください',
   STATE_MISMATCH: 'ログインの確認に失敗しました。もう一度ログインしてください',
   ACCESS_DENIED: 'Discord でログインが許可されませんでした',
@@ -145,6 +146,16 @@ async function showDashboard(session: WebSession): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  // 拡張機能の「Web ページを開く」から来た（W-09）。コードは URL から先に消す（履歴に残さない）
+  const code = handoffCode(location.hash);
+  if (code !== null) {
+    history.replaceState(null, '', '/');
+    try {
+      return await showDashboard(await WebSession.fromHandoff(CONFIG, fetch.bind(globalThis), sessionStorage, code));
+    } catch (e) {
+      return showLogin(errorText(e));
+    }
+  }
   if (location.pathname === '/callback') {
     const href = location.href;
     // 認可コードと state を URL から消す（履歴や、ほかへの送信に残さない）

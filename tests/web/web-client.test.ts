@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { FakeDiscord } from '../helpers/fake-discord.ts';
 import { TEST_ENV, WEB_ORIGIN, setup } from '../helpers/api.ts';
 import { referenceTotp, stepAt } from '../helpers/totp-reference.ts';
-import { SESSION_KEY, WebError, WebSession, finishLogin, startLogin, type WebConfig } from '../../src/web/page/web-client.ts';
+import { SESSION_KEY, WebError, WebSession, finishLogin, handoffCode, startLogin, type WebConfig } from '../../src/web/page/web-client.ts';
 
 const T0 = 1_800_000_000_000;
 mock.timers.enable({ apis: ['Date'], now: T0 });
@@ -63,8 +63,8 @@ async function discordRedirect(storage: MemoryStorage, userId: string): Promise<
 async function member(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member') {
   const userId = newDiscordUser();
   const secret = crypto.getRandomValues(new Uint8Array(20));
-  await t.addMember('active', { role, discordUserId: userId, totpSecret: secret });
-  return { userId, secret };
+  const m = await t.addMember('active', { role, discordUserId: userId, totpSecret: secret });
+  return { userId, secret, id: m.id };
 }
 
 async function loggedIn(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member', calls: string[] = [], storage = new MemoryStorage()) {
@@ -245,4 +245,42 @@ test('W-08 「このタブのログインを消す」で、置いた値を消す
   session.forget();
   assert.equal(storage.values.size, 0);
   assert.equal(await WebSession.resume(CONFIG, apiFetch(t), storage), null);
+});
+
+// 拡張機能から開く（2026-11-05 追記、W-09）。拡張機能が作った使い捨てのコードを、URL の # の後ろで受け取る
+async function extensionCode(t: ReturnType<typeof setup>, role: 'admin' | 'member' = 'member') {
+  const m = await member(t, role);
+  // 拡張機能でログインして TOTP を確かめたセッション
+  const ext = await t.addSession(m.id, { totpVerifiedAt: Date.now() });
+  const res = await t.request('POST', '/v1/me/web-handoff', ext.token, {});
+  assert.equal(res.status, 201);
+  return String(((await res.json()) as Record<string, unknown>).code);
+}
+
+test('W-09 URL の #handoff= からコードを取り出す。形が違えば null', () => {
+  const code = 'A'.repeat(43);
+  assert.equal(handoffCode(`#handoff=${code}`), code);
+  for (const bad of ['', '#', '#handoff=', `#handoff=${'A'.repeat(42)}`, `#handoff=${code}&x=1`, `#other=${code}`, `#handoff=${'A'.repeat(42)}+`]) assert.equal(handoffCode(bad), null, bad);
+});
+
+test('W-09 拡張機能のコードで Web 用のセッションを受け取り、sessionStorage に置く。再読み込みでも戻れる', async () => {
+  const t = setup();
+  const storage = new MemoryStorage();
+  const calls: string[] = [];
+  const session = await WebSession.fromHandoff(CONFIG, apiFetch(t, calls), storage, await extensionCode(t, 'admin'));
+  assert.deepEqual(calls, ['POST /v1/auth/web-handoff']);
+  assert.equal(session.member.role, 'admin');
+  assert.ok(Array.isArray((await session.get('/v1/audit-logs')).logs));
+  assert.deepEqual(Object.keys(stored(storage)), ['refresh', 'member']);
+  assert.ok(await WebSession.resume(CONFIG, apiFetch(t), storage));
+});
+
+test('W-09 使い終わった・期限切れのコードは HANDOFF。前に置いた値は消す', async () => {
+  const t = setup();
+  const code = await extensionCode(t);
+  await WebSession.fromHandoff(CONFIG, apiFetch(t), new MemoryStorage(), code);
+  const storage = new MemoryStorage();
+  storage.setItem(SESSION_KEY, '{"refresh":"old","member":{"id":"member_x","role":"member"}}');
+  await rejects(WebSession.fromHandoff(CONFIG, apiFetch(t), storage, code), 'HANDOFF');
+  assert.equal(storage.values.size, 0);
 });

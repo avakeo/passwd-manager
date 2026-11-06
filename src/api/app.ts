@@ -11,6 +11,7 @@ import { registerKeyRoutes } from './key-routes.ts';
 import { registerDeviceRoutes } from './device-routes.ts';
 import { registerMemberRoutes } from './member-routes.ts';
 import { registerRotateRoutes } from './rotate-routes.ts';
+import { registerWebHandoffRoutes } from './web-handoff-routes.ts';
 import type { D1Database } from './d1.ts';
 import type { Env } from './env.ts';
 import { readJson } from './json.ts';
@@ -62,6 +63,7 @@ export function createApp() {
       key === 'POST /v1/auth/discord' ||
       key === 'POST /v1/auth/refresh' ||
       key === 'POST /v1/auth/resume' ||
+      key === 'POST /v1/auth/web-handoff' ||
       (key === 'POST /v1/auth/totp' && c.req.header('Authorization') === undefined);
     if (!isPublic) {
       const p = await authenticate(c.env.DB, c.req.header('Authorization'));
@@ -76,6 +78,7 @@ export function createApp() {
   registerDeviceRoutes(app);
   registerMemberRoutes(app);
   registerRotateRoutes(app);
+  registerWebHandoffRoutes(app);
 
   // 自分と、自分の有効な鍵（新しい端末でロック解除するのに使う）。管理者は署名鍵も返す。
   // admin_signer は照合用の管理者の「メンバーID、鍵ID、署名用公開鍵」。承認待ちでも取れる（双方向の照合）。

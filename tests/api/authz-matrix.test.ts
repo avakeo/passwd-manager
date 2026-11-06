@@ -108,6 +108,8 @@ export const ROWS: Row[] = [
   { name: 'DELETE /v1/members/{id}', method: 'DELETE', path: () => '/v1/members/member_none', expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
   { name: 'POST /v1/vault/rotate', method: 'POST', path: () => '/v1/vault/rotate', body: () => ({}), expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
   { name: 'GET /v1/audit-logs', method: 'GET', path: () => '/v1/audit-logs', expect: cells(401, 401, 403, 403, 403, 403, 403, 'ok', 403, 403) },
+  // 拡張機能から Web ページを開く（2026-11-05 追記、W-09）
+  { name: 'POST /v1/me/web-handoff', method: 'POST', path: () => '/v1/me/web-handoff', body: () => ({}), expect: cells(401, 401, 403, 403, 403, 403, 'ok', 'ok', 403, 403) },
   {
     name: 'POST /v1/items/import',
     method: 'POST',

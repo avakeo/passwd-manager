@@ -67,6 +67,7 @@ function newBackground(w: World): Background {
   return createBackground({
     chrome: w.chrome,
     apiOrigin: API_ORIGIN,
+    webOrigin: null,
     discordClientId: TEST_ENV.DISCORD_CLIENT_ID,
     fetch: async (input, init) => {
       const url = new URL(String(input));

@@ -4,6 +4,7 @@
 //   - リフレッシュトークンと、画面に出す自分の ID と役割だけは sessionStorage にも置き、再読み込みしたらそれで同じセッションに
 //     戻る（2026-11-05 追記、W-08）。タブを閉じれば消える。更新したら置き換え、更新に失敗したら消す。役割は表示にだけ使い、
 //     見られる範囲はサーバーが決める
+//   - 拡張機能から開いたときは、URL の #handoff= の後ろの使い捨てのコードを、Web 用のセッションに替える（2026-11-05 追記、W-09）
 //   - 呼べるのは、決めた GET の入口だけ（Web 用のトークンは読み取り専用。Z-07）。アクセストークンが切れたら1回だけ更新する
 
 import { LoginError, createLoginRequest, parseLoginRedirect } from '../../client/discord-login.ts';
@@ -17,7 +18,7 @@ export const SESSION_KEY = 'teampw/v1/web-session';
 const DEVICE_LABEL = 'Web ページ';
 const ALLOWED_PATHS = new Set(['/v1/me', '/v1/me/sessions', '/v1/members', '/v1/audit-logs']);
 
-export type WebErrorCode = 'NO_PENDING' | 'STATE_MISMATCH' | 'ACCESS_DENIED' | 'MALFORMED' | 'FORBIDDEN' | 'BAD_CODE' | 'EXPIRED' | 'NOT_ALLOWED' | 'SERVER';
+export type WebErrorCode = 'HANDOFF' | 'NO_PENDING' | 'STATE_MISMATCH' | 'ACCESS_DENIED' | 'MALFORMED' | 'FORBIDDEN' | 'BAD_CODE' | 'EXPIRED' | 'NOT_ALLOWED' | 'SERVER';
 
 export class WebError extends Error {
   readonly code: WebErrorCode;
@@ -27,6 +28,12 @@ export class WebError extends Error {
     this.name = 'WebError';
     this.code = code;
   }
+}
+
+// 拡張機能が開いた URL の # の後ろ（#handoff=<コード>）からコードを取り出す。形が違えば null
+export function handoffCode(hash: string): string | null {
+  const m = /^#handoff=([A-Za-z0-9_-]{43})$/.exec(hash);
+  return m ? m[1]! : null;
 }
 
 function callbackUri(config: WebConfig): string {
@@ -97,6 +104,19 @@ export class WebSession {
   static async verifyTotp(config: WebConfig, fetchFn: typeof fetch, storage: KeyValue, challengeToken: string, code: string): Promise<WebSession> {
     const res = await post(fetchFn, config, '/v1/auth/totp', { challenge_token: challengeToken, code });
     if (res.status === 401 || res.status === 400) throw new WebError('BAD_CODE');
+    if (res.status === 403) throw new WebError('FORBIDDEN');
+    if (!res.ok) throw new WebError('SERVER');
+    const body = (await res.json()) as Json;
+    const m = body.member as Json | undefined;
+    if (typeof body.access_token !== 'string' || typeof body.refresh_token !== 'string' || !m || typeof m.id !== 'string') throw new WebError('SERVER');
+    return new WebSession(config, fetchFn, storage, { access: body.access_token, refresh: body.refresh_token }, { id: m.id, role: String(m.role) });
+  }
+
+  // 拡張機能から開いた：コードを Web 用のセッションに替える。前に置いた値は先に消す（別の人のセッションを残さない）
+  static async fromHandoff(config: WebConfig, fetchFn: typeof fetch, storage: KeyValue, code: string): Promise<WebSession> {
+    storage.removeItem(SESSION_KEY);
+    const res = await post(fetchFn, config, '/v1/auth/web-handoff', { code });
+    if (res.status === 401 || res.status === 400) throw new WebError('HANDOFF');
     if (res.status === 403) throw new WebError('FORBIDDEN');
     if (!res.ok) throw new WebError('SERVER');
     const body = (await res.json()) as Json;

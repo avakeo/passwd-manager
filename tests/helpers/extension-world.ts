@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createBackground, type Background } from '../../src/extension/background/background.ts';
 import { FakeDiscord } from './fake-discord.ts';
 import { FakeChrome } from './fake-chrome.ts';
-import { TEST_ENV, setup } from './api.ts';
+import { TEST_ENV, WEB_ORIGIN, setup } from './api.ts';
 import { base32ToBytes, referenceTotp, stepAt } from './totp-reference.ts';
 
 export const API_ORIGIN = 'https://pw-api.example.com';
@@ -22,6 +22,7 @@ export type World = {
   calls: string[];
   gates: Map<string, { arrive: () => void; released: Promise<void> }>;
   rewrite: ((call: string, res: Response) => Promise<Response | null>) | null;
+  webOrigin: string | null; // 拡張機能の設定の Web ページのオリジン（W-09）。null は未設定
 };
 
 export function newDiscord(): FakeDiscord {
@@ -37,7 +38,7 @@ export function newDiscord(): FakeDiscord {
 export function world(discord: FakeDiscord, t?: ReturnType<typeof setup>): World {
   const server = t ?? setup();
   if (!t) server.db.db.exec('DELETE FROM vault_meta; DELETE FROM vault_key_versions');
-  const w: World = { t: server, chrome: new FakeChrome(discord), bg: null as unknown as Background, calls: [], gates: new Map(), rewrite: null };
+  const w: World = { t: server, chrome: new FakeChrome(discord), bg: null as unknown as Background, calls: [], gates: new Map(), rewrite: null, webOrigin: WEB_ORIGIN };
   w.bg = restart(w);
   return w;
 }
@@ -47,6 +48,7 @@ export function restart(w: World): Background {
   w.bg = createBackground({
     chrome: w.chrome,
     apiOrigin: API_ORIGIN,
+    webOrigin: w.webOrigin,
     discordClientId: TEST_ENV.DISCORD_CLIENT_ID,
     fetch: async (input, init) => {
       const url = new URL(String(input));
