@@ -46,6 +46,7 @@ export const MESSAGE_SCHEMAS = {
   initVault: [{}],
   listSessions: [{}],
   revokeSession: [{ sessionId: { kind: 'string', min: 1, max: 64, pattern: /^[A-Za-z0-9_-]+$/ } }],
+  openWebPage: [{}], // 拡張機能から Web ページを開く（2026-11-05 追記、W-09）。全画面ページからだけ
   // クイックロック解除（フェーズ2b）
   setupQuickUnlock: [{ passcode: PASSCODE }],
   // ロック解除を保つ（2026-10-29 追記）

@@ -16,6 +16,7 @@ const chromeApi = (globalThis as unknown as { chrome: RealChrome }).chrome;
 const background = createBackground({
   chrome: chromeApi,
   apiOrigin: CONFIG.apiOrigin,
+  webOrigin: CONFIG.webOrigin,
   discordClientId: CONFIG.discordClientId,
   fetch: (input, init) => fetch(input, init),
 });

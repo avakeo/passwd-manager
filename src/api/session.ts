@@ -19,8 +19,11 @@ export async function issueSession(
   scope: 'extension' | 'web',
   label: string | null,
   totpVerifiedAt: number | null,
+  // リフレッシュの期限をこれより後にしない（拡張機能から Web ページを開くとき、元のセッションの期限に合わせる。W-09）
+  refreshExpiresNoLaterThan?: number,
 ): Promise<IssuedTokens> {
   const now = Date.now();
+  const refreshExpiresAt = Math.min(now + REFRESH_TOKEN_TTL_MS, refreshExpiresNoLaterThan ?? Infinity);
   const accessToken = newToken();
   const refreshToken = newToken();
   // 期限の切れたセッションの、使い終わったリフレッシュトークンの記録を消す（更新できないので、もう検知に要らない）
@@ -31,9 +34,9 @@ export async function issueSession(
                              refresh_expires_at, totp_verified_at, scope)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(newId('session'), memberId, await sha256Hex(accessToken), await sha256Hex(refreshToken), label, now, now + ACCESS_TOKEN_TTL_MS, now + REFRESH_TOKEN_TTL_MS, totpVerifiedAt, scope)
+    .bind(newId('session'), memberId, await sha256Hex(accessToken), await sha256Hex(refreshToken), label, now, now + ACCESS_TOKEN_TTL_MS, refreshExpiresAt, totpVerifiedAt, scope)
     .run();
-  return { access_token: accessToken, refresh_token: refreshToken, access_expires_at: now + ACCESS_TOKEN_TTL_MS, refresh_expires_at: now + REFRESH_TOKEN_TTL_MS };
+  return { access_token: accessToken, refresh_token: refreshToken, access_expires_at: now + ACCESS_TOKEN_TTL_MS, refresh_expires_at: refreshExpiresAt };
 }
 
 // リフレッシュトークンでセッションを更新する。stillAllowed は、削除済みでないこと・ロールを持つことを確かめる（A-04）。

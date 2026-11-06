@@ -28,6 +28,8 @@ export type Handler = (m: Message, sender: MessageSender) => Promise<Reply>;
 export type BackgroundDeps = {
   chrome: ChromeLike;
   apiOrigin: string;
+  // 「Web ページを開く」で開く先（拡張機能の設定。サーバーの値は使わない）。null なら開かない（W-09）
+  webOrigin: string | null;
   discordClientId: string;
   fetch: (input: string, init: RequestInit) => Promise<Response>;
 };
